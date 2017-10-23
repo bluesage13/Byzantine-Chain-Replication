@@ -1,0 +1,45 @@
+import time
+import sys
+olympus = import_da('Olympus')
+client = import_da('Client')
+
+def getWorkload(conf):
+  workload = {}
+  for (key,val) in conf.items():
+    if key[0:8] == "workload":
+      ind = ""
+      for c in key[8:len(key)]:
+        if c != '[' and c != ']':
+          ind = ind + c
+      temp = val.split(';')
+      commands = []
+      for cmd in temp:
+        commands.append(cmd.strip())
+      workload[ind] = commands
+  return workload
+
+
+def main():
+  conf = {}
+  workload = {}
+  with open('config.txt', 'r') as f:
+    for line in f:
+      if line[0] != '#':
+        (key, sep, val) = line.partition('=')
+        if(len(sep) != 0):
+          val = val.strip()
+          conf[key.strip()] = int(val) if str.isdecimal(val) else val
+
+  workload = getWorkload(conf)
+  output("Creating Olympus")
+  #oly = new(olympus.Olympus, num=1, at=conf['olympus_node'])
+  oly = new(olympus.Olympus, num=1)
+  setup(oly, (conf,))
+  start(oly)
+  output("Creating Client")
+  cli = new(client.Client, num=conf['num_client'])
+  w = 0
+  for c in cli:
+    setup(c, (conf,oly, workload[str(w)]))
+    start(c)
+    w = w + 1

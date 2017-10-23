@@ -1,0 +1,296 @@
+class Replica(process):
+
+  def setup(conf, head, tail, olympus):
+    self.db = {}
+    self.state = "ACTIVE"
+    self.isHead = head
+    self.isTail = tail
+    self.successor = self
+    self.predecessor = self
+    self.History = {}
+    self.current_slot = 0
+    self.resultCache = {}
+
+  def run():
+    send(('get_successor_predecessor'), to = olympus)
+    await(False)
+
+  def get_slot_number():
+    s = self.current_slot
+    self.current_slot = self.current_slot + 1
+    return s
+
+  def checkIfRidPresentInHistory(requestID):
+    if requestID in self.History:
+      return True
+    return False
+
+  def orderCommand(s, o, args):
+    os = str(self);
+    os = os + ';' + str(s)
+    os = os + ';' + o
+    for arg in args:
+      os = os + ';' + arg
+    for key in self.History:
+      if (self.History[key] == os):
+        #become immutable and send erconfig
+        return "error"
+    return os
+
+  def verifyOrderProof(orderProof, requestID):
+    orderStatements = orderProof[requestID]
+    for i in range(0, (len(orderStatements) - 1)):
+      if( orderStatements[i].split(';')[1:] != orderStatements[i+1].split(';')[1:] ):
+        return False
+    return True
+
+
+  def receive(msg = ('put', k_v, client_id, requestID), from_=p_id):
+    if(self.state == "ACTIVE"):
+      if(checkIfRidPresentInHistory(requestID) == False):
+        if(self.isHead):
+          slot = get_slot_number()
+          os = orderCommand(slot, 'put', k_v)
+          if(os != 'error'):
+            self.History[requestID] = os
+          self.db[k_v[0]] = k_v[1]
+          orderProof = {}
+          orderProof[requestID] = [os]
+          result_statement = ""
+          result_statement = str(self) + ";" + "OK"
+          resultProof = {}
+          resultProof[requestID] = [result_statement]
+          OrderShuttle = [orderProof, resultProof]
+          send(('put', k_v, client_id, requestID, OrderShuttle), to = self.successor)
+        else:
+          #this is a retransmission case handle it accordingly
+          x = 1
+
+      else:
+        output("operation already present in history")
+        if(requestID in self.resultCache) :
+          send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+
+        else:
+          output("Handle the case where its retransmission and you still haven't received the result shuttle I guess")
+
+    else:
+      output("Replica is immutable")
+
+  def receive(msg = ('put', k_v, client_id, requestID, OrderShuttle), from_=p_id):
+    if(isHead != True):
+      if(verifyOrderProof(OrderShuttle[0], requestID) == True):
+        slot = get_slot_number()
+        os = orderCommand(slot, 'put', k_v)
+        if(os != 'error'):
+          self.History[requestID] = os
+        self.db[k_v[0]] = k_v[1]
+        OrderShuttle[0][requestID].append(os)
+        result_statement = ""
+        result_statement = str(self) + ";" + "OK"
+        OrderShuttle[1][requestID].append(result_statement)
+        if(isTail != True):
+          send(('put', k_v, client_id, requestID, OrderShuttle), to = self.successor)
+        else:
+          send(('put_result', OrderShuttle[1], requestID), to = client_id)
+          send(('result_back', OrderShuttle[1], requestID), to = self.predecessor)
+      else:
+        output("Dropping invalid request")
+
+  def receive(msg=('get', key, client_id, requestID), from_=p_id):
+    if(self.state == "ACTIVE"):
+      if(checkIfRidPresentInHistory(requestID) == False):
+        if(self.isHead):
+          slot = get_slot_number()
+          os = orderCommand(slot, 'get', [key])
+          if(os != 'error'):
+            self.History[requestID] = os
+          orderProof = {}
+          orderProof[requestID] = [os]
+          result_statement = ""
+          result_statement = str(self) + ";" + self.db[key]
+          resultProof = {}
+          resultProof[requestID] = [result_statement]
+          OrderShuttle = [orderProof, resultProof]
+          send(('get', key, client_id, requestID, OrderShuttle), to = self.successor)
+        else:
+          #this is a retransmission case handle it accordingly
+          x = 1
+
+      else:
+        output("operation already present in history")
+        if(requestID in self.resultCache) :
+          send(('get_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+
+        else:
+          output("Handle the case where its retransmission and you still haven't received the result shuttle I guess")
+
+    else:
+      output("Replica is immutable")
+
+  def receive(msg = ('get', key, client_id, requestID, OrderShuttle), from_=p_id):
+    if(isHead != True):
+      if(verifyOrderProof(OrderShuttle[0], requestID) == True):
+        slot = get_slot_number()
+        os = orderCommand(slot, 'get', [key])
+        if(os != 'error'):
+          self.History[requestID] = os
+        OrderShuttle[0][requestID].append(os)
+        result_statement = ""
+        result_statement = str(self) + ";" + self.db[key]
+        OrderShuttle[1][requestID].append(result_statement)
+        if(isTail != True):
+          send(('get', key, client_id, requestID, OrderShuttle), to = self.successor)
+        else:
+          send(('get_result', OrderShuttle[1], requestID), to = client_id)
+          send(('result_back', OrderShuttle[1], requestID), to = self.predecessor)
+      else:
+        output("Dropping invalid request")
+
+  def receive(msg=('slice', args, client_id, requestID), from_=p_id):
+    if(self.state == "ACTIVE"):
+      if(checkIfRidPresentInHistory(requestID) == False):
+        if(self.isHead):
+          slot = get_slot_number()
+          os = orderCommand(slot, 'slice', args)
+          if(os != 'error'):
+            self.History[requestID] = os
+          orderProof = {}
+          orderProof[requestID] = [os]
+          result_statement = ""
+          val = self.db[args[0]]
+          (start, end) = args[1].split(':')
+          if((int(start) >= 0) and (int(end) <= len(val))):
+            val = val[int(start):int(end)]
+            self.db[args[0]] = val
+            result_statement = str(self) + ';' + "OK"
+          else:
+            result_statement = str(self) + ';' + "FAIL"
+          resultProof = {}
+          resultProof[requestID] = [result_statement]
+          OrderShuttle = [orderProof, resultProof]
+          send(('slice', args, client_id, requestID, OrderShuttle), to = self.successor)
+        else:
+          #this is a retransmission case handle it accordingly
+          x = 1
+
+      else:
+        output("Already Present in History")
+        if(requestID in self.resultCache) :
+          send(('slice_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+
+        else:
+          output("Handle the case where its retransmission and you still haven't received the result shuttle I guess")
+
+    else:
+      output("Replica is immutable")
+
+  def receive(msg=('slice', args, client_id, requestID, OrderShuttle), from_=p_id):
+    if(isHead != True):
+      if(verifyOrderProof(OrderShuttle[0], requestID) == True):
+        slot = get_slot_number()
+        os = orderCommand(slot, 'slice', args)
+        if(os != 'error'):
+          self.History[requestID] = os
+        OrderShuttle[0][requestID].append(os)
+        result_statement = ""
+        val = self.db[args[0]]
+        (start, end) = args[1].split(':')
+        if((int(start) >= 0) and (int(end) <= len(val))):
+          val = val[int(start):int(end)]
+          self.db[args[0]] = val
+          result_statement = str(self) + ';' + "OK"
+        else:
+          result_statement = str(self) + ';' + "FAIL"
+        OrderShuttle[1][requestID].append(result_statement)
+        if(isTail != True):
+          send(('slice', args, client_id, requestID, OrderShuttle), to = self.successor)
+        else:
+          send(('slice_result', OrderShuttle[1], requestID), to = client_id)
+          send(('result_back', OrderShuttle[1], requestID), to = self.predecessor)
+      else:
+        output("Dropping invalid request")
+
+  def receive(msg=('append', args, client_id, requestID), from_=p_id):
+    if(self.state == "ACTIVE"):
+      if(checkIfRidPresentInHistory(requestID) == False):
+        if(self.isHead):
+          slot = get_slot_number()
+          os = orderCommand(slot, 'append', args)
+          if(os != 'error'):
+            self.History[requestID] = os
+          orderProof = {}
+          orderProof[requestID] = [os]
+          result_statement = ""
+          val = self.db[args[0]]
+          if(args[0] in self.db):
+            val = self.db[args[0]]
+            val = val + " " + args[1]
+            self.db[args[0]] = val
+            result_statement = str(self) + ';' + "OK"
+          else:
+            result_statement = str(self) + ';' + "FAIL"
+          resultProof = {}
+          resultProof[requestID] = [result_statement]
+          OrderShuttle = [orderProof, resultProof]
+          send(('append', args, client_id, requestID, OrderShuttle), to = self.successor)
+        else:
+          #this is a retransmission case handle it accordingly
+          x = 1
+
+      else:
+        output("operation already present in history")
+        if(requestID in self.resultCache) :
+          send(('get_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+
+        else:
+          output("Handle the case where its retransmission and you still haven't received the result shuttle I guess")
+
+    else:
+      output("Replica is immutable")
+
+  def receive(msg=('append', args, client_id, requestID, OrderShuttle), from_=p_id):
+    if(isHead != True):
+      if(verifyOrderProof(OrderShuttle[0], requestID) == True):
+        slot = get_slot_number()
+        os = orderCommand(slot, 'append', args)
+        if(os != 'error'):
+          self.History[requestID] = os
+        OrderShuttle[0][requestID].append(os)
+        result_statement = ""
+        val = self.db[args[0]]
+        if(args[0] in self.db):
+          val = self.db[args[0]]
+          val = val + " " + args[1]
+          self.db[args[0]] = val
+          result_statement = str(self) + ';' + "OK"
+        else:
+          result_statement = str(self) + ';' + "FAIL"
+        OrderShuttle[1][requestID].append(result_statement)
+        if(isTail != True):
+          send(('append', args, client_id, requestID, OrderShuttle), to = self.successor)
+        else:
+          send(('append_result', OrderShuttle[1], requestID), to = client_id)
+          send(('result_back', OrderShuttle[1], requestID), to = self.predecessor)
+      else:
+        output("Dropping invalid request")
+
+  def receive(msg = ('get_dict'), from_ = client_id):
+    send(('dict_reply', self.db), to = client_id)
+
+  def receive(msg = ('result_back', result_shuttle, requestID), from_ = p_id):
+    cond = True
+    for key in result_shuttle:
+      resultStatements = result_shuttle[key]
+      for i in range(0, (len(resultStatements) - 1)):
+        if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
+          cond = False
+          break
+    if(cond == True):
+      self.resultCache[requestID] = result_shuttle[requestID]
+    for key in self.resultCache :
+      output(key, self.resultCache[key])
+
+  def receive(msg=('val_successor_predecessor', p, s), from_ = olympus):
+    self.successor = s
+    self.predecessor = p

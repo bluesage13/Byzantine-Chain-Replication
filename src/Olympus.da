@@ -1,0 +1,41 @@
+replica = import_da('Replica')
+
+class Olympus(process):
+  def setup(conf):
+    self.replicas = {}
+
+  def run():
+    create_replicas()
+    while(True):
+      await(False)
+
+  def receive(msg = ('getConfig', p), from_ = client_id):
+    output("Sending current config to : ", client_id)
+    send(('currentConfig', self.replicas), to = client_id)
+
+  def receive(msg = ('get_successor_predecessor'), from_ = replica_id):
+    rep = list(self.replicas)
+    for i in range(0, len(rep)):
+      if(rep[i] == replica_id):
+        break
+    if (i == 0):
+      send(('val_successor_predecessor', None, rep[i+1]), to = replica_id)
+    elif (i == (len(rep) - 1)):
+      send(('val_successor_predecessor', rep[i - 1], None), to = replica_id)
+    else:
+      send(('val_successor_predecessor', rep[i - 1], rep[i+1]), to = replica_id)
+
+  def create_replicas():
+    num_replicas = 2 * conf['t'] + 1
+    self.replicas = new(replica.Replica, num = num_replicas)
+    output(self.replicas)
+    cnt = 0
+    for r in self.replicas:
+      if(cnt == 0):
+        setup(r, (conf, True, False, self))
+      elif(cnt == (len(self.replicas) - 1)):
+        setup(r, (conf, False, True, self))
+      else:
+        setup(r, (conf, False, False, self))
+      start(r)
+      cnt = cnt + 1

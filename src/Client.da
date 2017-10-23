@@ -1,0 +1,111 @@
+replica = import_da('Replica')
+olympus = import_da('Olympus')
+
+class Client(process):
+
+  def setup(conf, oly, workload):
+    self.replicas = {}
+    self.flag = 0
+
+  def run():
+    send(('getConfig', self), to = oly)
+    await(len(self.replicas) != 0)
+    output (" The workload is: ", workload)
+
+    #TO Do: separate workload into commands
+    operationlist = {}
+    rep = list(self.replicas)
+    head = rep[0]
+    opNum = 0
+    for op in workload:
+      op_b = op[0:3]
+      if(op_b == 'put'):
+        key_val = op[4:(len(op)-1)]
+        args = getArguments(key_val)
+        send(('put', args, self, generateRequestId(opNum)), to = head)
+        await(flag == 1)
+        flag = 0
+
+      elif(op_b == 'get'):
+        key = op[4:(len(op)-1)]
+        args = getArguments(key)
+        send(('get', (args[0]), self, generateRequestId(opNum)), to = head)
+        await(flag == 1)
+        self.flag = 0
+
+      elif(op_b == 'sli'):
+        key_val = op[6:(len(op)-1)]
+        args = getArguments(key_val)
+        send(('slice', args, self, generateRequestId(opNum)), to = head)
+        await(flag == 1)
+        self.flag = 0
+
+      elif(op_b == 'app'):
+        key_val = op[7:(len(op)-1)]
+        args = getArguments(key_val)
+        send(('append', args, self, generateRequestId(opNum)), to = head)
+        await(flag == 1)
+        self.flag = 0
+
+      opNum = opNum + 1
+
+    send(('get_dict'), to = head)
+    await(flag == 1)
+    flag = 0
+
+  def generateRequestId(opNum):
+    requestID = str(self) + ';' + str(opNum)
+    return requestID
+
+  def receive(msg=('put_result', resultShuttle ,requestID), from_=tail_id):
+    for key in resultShuttle:
+      resultStatements = resultShuttle[key]
+      for i in range(0, (len(resultStatements) - 1)):
+        if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
+          output("error")
+      output("Success. Result found.")
+
+    flag = flag + 1
+
+  def receive(msg=('get_result', resultShuttle ,requestID), from_=tail_id):
+    for key in resultShuttle:
+      resultStatements = resultShuttle[key]
+      for i in range(0, (len(resultStatements) - 1)):
+        if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
+          output("error")
+      output("Movie is: ", resultStatements[0].split(';')[1])
+
+    flag = flag + 1
+
+  def receive(msg=('slice_result', resultShuttle ,requestID), from_=tail_id):
+    for key in resultShuttle:
+      resultStatements = resultShuttle[key]
+      for i in range(0, (len(resultStatements) - 1)):
+        if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
+          output("error")
+      output("Split Successful")
+    flag = flag + 1
+
+  def receive(msg=('append_result', resultShuttle ,requestID), from_=tail_id):
+    for key in resultShuttle:
+      resultStatements = resultShuttle[key]
+      for i in range(0, (len(resultStatements) - 1)):
+        if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
+          output("error")
+      output("Append Successful")
+    flag = flag + 1
+
+  def receive(msg=('currentConfig', replicas), from_=olympus_id):
+    self.replicas = replicas
+
+  def receive(msg = ('dict_reply', db), from_ = p_id):
+    output("Current State: ", db)
+    flag = flag + 1
+
+  def getArguments(key_val):
+    args_t = key_val.split(',')
+    args = []
+    for arg in args_t:
+      arg = arg.strip()
+      args.append(arg[1:(len(arg)-1)])
+    return args
