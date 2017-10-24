@@ -108,7 +108,10 @@ class Replica(process):
           orderProof = {}
           orderProof[requestID] = [os]
           result_statement = ""
-          result_statement = str(self) + ";" + self.db[key]
+          if(key in self.db):
+            result_statement = str(self) + ";" + self.db[key]
+          else:
+            result_statement = str(self) + ";"
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
@@ -137,7 +140,10 @@ class Replica(process):
           self.History[requestID] = os
         OrderShuttle[0][requestID].append(os)
         result_statement = ""
-        result_statement = str(self) + ";" + self.db[key]
+        if(key in self.db):
+          result_statement = str(self) + ";" + self.db[key]
+        else:
+          result_statement = str(self) + ";"
         OrderShuttle[1][requestID].append(result_statement)
         if(isTail != True):
           send(('get', key, client_id, requestID, OrderShuttle), to = self.successor)
@@ -158,14 +164,19 @@ class Replica(process):
           orderProof = {}
           orderProof[requestID] = [os]
           result_statement = ""
-          val = self.db[args[0]]
+
           (start, end) = args[1].split(':')
-          if((int(start) >= 0) and (int(end) <= len(val))):
-            val = val[int(start):int(end)]
-            self.db[args[0]] = val
-            result_statement = str(self) + ';' + "OK"
+          if(args[0] in self.db):
+            val = self.db[args[0]]
+            if((int(start) >= 0) and (int(end) <= len(val))):
+              val = val[int(start):int(end)]
+              self.db[args[0]] = val
+              result_statement = str(self) + ';' + "OK"
+            else:
+              result_statement = str(self) + ';' + "FAIL"
           else:
             result_statement = str(self) + ';' + "FAIL"
+
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
@@ -194,14 +205,19 @@ class Replica(process):
           self.History[requestID] = os
         OrderShuttle[0][requestID].append(os)
         result_statement = ""
-        val = self.db[args[0]]
+
         (start, end) = args[1].split(':')
-        if((int(start) >= 0) and (int(end) <= len(val))):
-          val = val[int(start):int(end)]
-          self.db[args[0]] = val
-          result_statement = str(self) + ';' + "OK"
+        if(args[0] in self.db):
+          val = self.db[args[0]]
+          if((int(start) >= 0) and (int(end) <= len(val))):
+            val = val[int(start):int(end)]
+            self.db[args[0]] = val
+            result_statement = str(self) + ';' + "OK"
+          else:
+            result_statement = str(self) + ';' + "FAIL"
         else:
           result_statement = str(self) + ';' + "FAIL"
+
         OrderShuttle[1][requestID].append(result_statement)
         if(isTail != True):
           send(('slice', args, client_id, requestID, OrderShuttle), to = self.successor)
@@ -222,7 +238,6 @@ class Replica(process):
           orderProof = {}
           orderProof[requestID] = [os]
           result_statement = ""
-          val = self.db[args[0]]
           if(args[0] in self.db):
             val = self.db[args[0]]
             val = val + " " + args[1]
@@ -258,7 +273,6 @@ class Replica(process):
           self.History[requestID] = os
         OrderShuttle[0][requestID].append(os)
         result_statement = ""
-        val = self.db[args[0]]
         if(args[0] in self.db):
           val = self.db[args[0]]
           val = val + " " + args[1]
@@ -288,8 +302,8 @@ class Replica(process):
           break
     if(cond == True):
       self.resultCache[requestID] = result_shuttle[requestID]
-    for key in self.resultCache :
-      output(key, self.resultCache[key])
+    #for key in self.resultCache :
+    #  output(key, self.resultCache[key])
 
   def receive(msg=('val_successor_predecessor', p, s), from_ = olympus):
     self.successor = s

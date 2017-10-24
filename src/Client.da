@@ -1,3 +1,4 @@
+import random
 replica = import_da('Replica')
 olympus = import_da('Olympus')
 
@@ -11,9 +12,12 @@ class Client(process):
     send(('getConfig', self), to = oly)
     await(len(self.replicas) != 0)
     output (" The workload is: ", workload)
+    if(workload[0][0:6] == 'pseudo'):
+      key_val = workload[0][13:(len(workload[0])-1)]
+      seed = int(key_val.split(',')[0])
+      opn = int(key_val.split(',')[1])
+      workload = getPseudorandomWL(seed, opn)
 
-    #TO Do: separate workload into commands
-    operationlist = {}
     rep = list(self.replicas)
     head = rep[0]
     opNum = 0
@@ -49,6 +53,8 @@ class Client(process):
 
       opNum = opNum + 1
 
+
+
     send(('get_dict'), to = head)
     await(flag == 1)
     flag = 0
@@ -63,7 +69,7 @@ class Client(process):
       for i in range(0, (len(resultStatements) - 1)):
         if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
           output("error")
-      output("Success. Result found.")
+      output("Put Successful")
 
     flag = flag + 1
 
@@ -73,7 +79,10 @@ class Client(process):
       for i in range(0, (len(resultStatements) - 1)):
         if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
           output("error")
-      output("Movie is: ", resultStatements[0].split(';')[1])
+      if(resultStatements[0].split(';')[1] != ""):
+        output("The value for key is: ", resultStatements[0].split(';')[1])
+      else:
+        output("Key does not exist in database")
 
     flag = flag + 1
 
@@ -83,7 +92,10 @@ class Client(process):
       for i in range(0, (len(resultStatements) - 1)):
         if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
           output("error")
-      output("Split Successful")
+      if(resultStatements[i].split(';')[1] != "FAIL"):
+        output("Split successful")
+      else:
+        output("Split unsuccessful as key is not present.")
     flag = flag + 1
 
   def receive(msg=('append_result', resultShuttle ,requestID), from_=tail_id):
@@ -92,7 +104,10 @@ class Client(process):
       for i in range(0, (len(resultStatements) - 1)):
         if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
           output("error")
-      output("Append Successful")
+      if(resultStatements[i].split(';')[1] != "FAIL"):
+        output("Append successful")
+      else:
+        output("Append unsuccessful as key is not present.")
     flag = flag + 1
 
   def receive(msg=('currentConfig', replicas), from_=olympus_id):
@@ -109,3 +124,36 @@ class Client(process):
       arg = arg.strip()
       args.append(arg[1:(len(arg)-1)])
     return args
+
+  def getPseudorandomWL(seed, nOps):
+    with open("words.txt") as f:
+      words = f.read().splitlines()
+    operations = ['put', 'get', 'append', 'slice']
+    random.seed(seed)
+    ind = [x%4 for x in random.sample(range(nOps * 2), nOps)]
+    listops = [operations[x] for x in ind]
+    ind = [x for x in random.sample(range(20000), nOps * 3)]
+    act_words = [words[x] for x in ind]
+    #random.seed(None)
+    workload = ""
+    for op in listops:
+        if(op == 'put'):
+            str1 = act_words[random.randint(0,len(act_words) - 1)]
+            str2 = act_words[random.randint(0,len(act_words) - 1)]
+            workload = workload + ";" + "put('" + str1 + "','" + str2 + "')"
+        elif(op == 'get'):
+            str1 = act_words[random.randint(0,len(act_words) - 1)]
+            workload = workload + ";" + "get('" + str1 + "')"
+        elif(op == 'append'):
+            str1 = act_words[random.randint(0,len(act_words) - 1)]
+            str2 = act_words[random.randint(0,len(act_words) - 1)]
+            workload = workload + ";" + "append('" + str1 + "','" + str2 + "')"
+        elif(op == 'slice'):
+            str1 = act_words[random.randint(0,len(act_words) - 1)]
+            num1 = random.randint(1, len(str1))
+            num2 = random.randint(1, len(str1))
+            if num1 > num2 : str2 = str(num2) +":"+ str(num1)
+            else: str2 = str(num1) +":"+ str(num2)
+            workload = workload + ";" + "slice('" + str1 + "','" + str2 + "')"
+    output(workload.strip(';').split(';'))
+    return workload.strip(';').split(';')
