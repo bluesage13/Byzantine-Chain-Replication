@@ -3,14 +3,17 @@ import nacl.signing
 replica = import_da('Replica')
 
 class Olympus(process):
-  def setup(conf):
+  def setup(conf, cni, fc):
     self.replicas = {}
     self.clientKeyMap = {}
     self.replicaKeyMap = {}
     self.prikey = ""
     self.pubkey = ""
+    self.client_num_id = cni
+    self.failureCases = fc
 
   def run():
+    output(self.client_num_id)
     self.prikey = nacl.signing.SigningKey.generate()
     self.pubkey = self.prikey.verify_key
     create_replicas()
@@ -53,10 +56,22 @@ class Olympus(process):
       pub_key = pri_key.verify_key
       self.replicaKeyMap[r] = pub_key
       if(cnt == 0):
-        setup(r, (conf, True, False, pri_key, self))
+        if(cnt in self.failureCases):
+          setup(r, (conf, True, False, pri_key, cni, failureCases[cnt], self))
+        else:
+          setup(r, (conf, True, False, pri_key, cni, None, self))
+
       elif(cnt == (len(self.replicas) - 1)):
-        setup(r, (conf, False, True, pri_key, self))
+        if(cnt in self.failureCases):
+          setup(r, (conf, False, True, pri_key, cni, failureCases[cnt], self))
+        else:
+          setup(r, (conf, False, True, pri_key, cni, None, self))
+
       else:
-        setup(r, (conf, False, False, pri_key, self))
+        if(cnt in self.failureCases):
+          setup(r, (conf, False, False, pri_key, cni, failureCases[cnt], self))
+        else:
+          setup(r, (conf, False, False, pri_key, cni, None, self))
+
       start(r)
       cnt = cnt + 1

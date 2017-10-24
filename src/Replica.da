@@ -2,7 +2,7 @@ import time
 
 class Replica(process):
 
-  def setup(conf, head, tail, pri_key, olympus):
+  def setup(conf, head, tail, pri_key, cni, failures, olympus):
     self.db = {}
     self.state = "ACTIVE"
     self.isHead = head
@@ -19,14 +19,38 @@ class Replica(process):
     self.replicaKM = {}
     self.clientKM = {}
     self.flag = 0
-
+    self.cr_cnt = {}
+    self.cr_trig = {}
+    self.fr_cnt = {}
+    self.fr_trig = {}
+    self.s_cnt = {}
+    self.s_trig = {}
+    self.sh_cnt = {}
+    self.sh_trig = {}
+    self.client_num_id = cni
+    self.failures = failures
 
   def run():
     send(('get_chain_info'), to = olympus)
     await(self.flag == 1)
     self.flag = 0
     send(('get_public_key_maps'), to = olympus)
+    #jtorasakar
+    parse_failures()
     await(False)
+
+  def parse_failures():
+    #jtorasakar : Here you should write the function. I have already created the variables for you. you just have to operate on self.failures
+    #and fill the variables self.cr_cnt, self.cr_trig and below. For client_id to number matching you have to use self.client_num_id{}
+    #its a map {<clientid> : <client_num>}
+    #to run the code copy all you have to run the command "python3 -m da startup.da" in the src folder.
+    #Instead what you can do is copy: Olympus.da Replica.da Client.da startup.da config.txt(from config folder) to another location so you dont have to worry about the
+    #paths. once you copy them to a location. go to the location and run the above command. you will see something like this in the output:
+    #[347] Replica.Replica<Replica:1d804>:OUTPUT: ['client_request(2,1), crash()'] -> see in config.txt
+    #[347] Replica.Replica<Replica:1d806>:OUTPUT: None
+    #[349] Replica.Replica<Replica:1d805>:OUTPUT: None
+
+    output(self.failures)
 
   def get_slot_number():
     s = self.current_slot
@@ -131,7 +155,7 @@ class Replica(process):
           send(('put', k_v, client_id, requestID, OrderShuttle), to = self.successor)
         else:
           send(('put_result', OrderShuttle[1], requestID), to = client_id)
-          send(('result_back', OrderShuttle[1], requestID), to = self.predecessor)
+          send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
       else:
         output("Dropping invalid request")
 
@@ -194,7 +218,7 @@ class Replica(process):
           send(('get', key, client_id, requestID, OrderShuttle), to = self.successor)
         else:
           send(('get_result', OrderShuttle[1], requestID), to = client_id)
-          send(('result_back', OrderShuttle[1], requestID), to = self.predecessor)
+          send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
       else:
         output("Dropping invalid request")
 
@@ -275,7 +299,7 @@ class Replica(process):
           send(('slice', args, client_id, requestID, OrderShuttle), to = self.successor)
         else:
           send(('slice_result', OrderShuttle[1], requestID), to = client_id)
-          send(('result_back', OrderShuttle[1], requestID), to = self.predecessor)
+          send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
       else:
         output("Dropping invalid request")
 
@@ -344,20 +368,20 @@ class Replica(process):
           send(('append', args, client_id, requestID, OrderShuttle), to = self.successor)
         else:
           send(('append_result', OrderShuttle[1], requestID), to = client_id)
-          send(('result_back', OrderShuttle[1], requestID), to = self.predecessor)
+          send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
       else:
         output("Dropping invalid request")
 
   def receive(msg = ('get_dict'), from_ = client_id):
     send(('dict_reply', self.db), to = client_id)
 
-  def receive(msg = ('result_back', result_shuttle, requestID), from_ = p_id):
+  def receive(msg = ('result_back', result_shuttle, requestID, clientID), from_ = p_id):
     cond = True
     resultStatements = result_shuttle[requestID]
     i = 0
     for key in self.replicaKM:
       try:
-        self.replicaKM[key].verify(resultStatement[i])
+        self.replicaKM[key].verify(resultStatements[i])
         i = i + 1
       except:
         cond = False
@@ -374,6 +398,8 @@ class Replica(process):
         self.resultCache[requestID] = result_shuttle[requestID]
         if(isHead == False):
           send(('result_back', result_shuttle, requestID), to = self.predecessor)
+    else:
+      output("Needs reconfiguration as the result shuttle is inconsistent")
     #for key in self.resultCache :
     #  output(key, self.resultCache[key])
 
