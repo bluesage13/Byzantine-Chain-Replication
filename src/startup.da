@@ -36,10 +36,13 @@ def main():
   oly = new(olympus.Olympus, num=1)
   setup(oly, (conf,))
   start(oly)
+
   output("Creating Client")
   cli = new(client.Client, num=conf['num_client'])
+
   w = 0
   for c in cli:
     setup(c, (conf,oly, workload[str(w)]))
     start(c)
     w = w + 1
+  sys.exit()

@@ -7,10 +7,20 @@ class Client(process):
   def setup(conf, oly, workload):
     self.replicas = {}
     self.flag = 0
+    self.RTRequest = []
+    self.private_key = ""
+    self.replicaKM = {}
+    self.clientKM = {}
 
   def run():
     send(('getConfig', self), to = oly)
     await(len(self.replicas) != 0)
+    send(('generate_keys'), to = oly)
+    await(self.flag == 1)
+    self.flag = 0
+    send(('get_public_key_maps'), to = oly)
+    await(self.flag == 1)
+    self.flag = 0
     output (" The workload is: ", workload)
     if(workload[0][0:6] == 'pseudo'):
       key_val = workload[0][13:(len(workload[0])-1)]
@@ -27,8 +37,16 @@ class Client(process):
         key_val = op[4:(len(op)-1)]
         args = getArguments(key_val)
         send(('put', args, self, generateRequestId(opNum)), to = head)
-        await(flag == 1)
-        flag = 0
+        while(True):
+          if await(flag == 1):
+            self.flag = 0
+            break
+          elif timeout(conf['client_timeout']/1000):
+            output("Operation TimedOut. Broadcasting message to all clients")
+            self.RTRequest.append(generateRequestId(opNum))
+            for r in self.replicas:
+              send(('put', args, self, generateRequestId(opNum)), to = r)
+
 
       elif(op_b == 'get'):
         key = op[4:(len(op)-1)]
@@ -63,51 +81,88 @@ class Client(process):
     requestID = str(self) + ';' + str(opNum)
     return requestID
 
-  def receive(msg=('put_result', resultShuttle ,requestID), from_=tail_id):
-    for key in resultShuttle:
-      resultStatements = resultShuttle[key]
-      for i in range(0, (len(resultStatements) - 1)):
-        if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
-          output("error")
-      output("Put Successful")
+  def receive(msg = ('public_key_maps', cKM, rKM), from_ = olympus):
+    self.replicaKM = rKM
+    self.clientKM = cKM
+    self.flag = 1
 
+  def receive(msg=('put_result', resultShuttle ,requestID), from_=tail_id):
+    if((requestID in self.RTRequest) == False):
+      resultStatements = resultShuttle[requestID]
+      i = 0
+      for key in self.replicaKM:
+        try:
+          self.replicaKM[key].verify(resultStatements[i])
+          i = i + 1
+        except:
+          output("Something is wrongs")
+
+      res = self.replicaKM[tail_id].verify(resultStatements[i-1]).decode('utf-8').split(';')[1]
+      if(res == 'OK'):
+        output("Put Successful")
+
+    else:
+      output("Old response received, dropping it")
     flag = flag + 1
 
   def receive(msg=('get_result', resultShuttle ,requestID), from_=tail_id):
-    for key in resultShuttle:
-      resultStatements = resultShuttle[key]
-      for i in range(0, (len(resultStatements) - 1)):
-        if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
-          output("error")
-      if(resultStatements[0].split(';')[1] != ""):
-        output("The value for key is: ", resultStatements[0].split(';')[1])
-      else:
-        output("Key does not exist in database")
+    if((requestID in self.RTRequest) == False):
+      resultStatements = resultShuttle[requestID]
+      i = 0
+      for key in self.replicaKM:
+        try:
+          self.replicaKM[key].verify(resultStatements[i])
+          i = i + 1
+        except:
+          output("Result Statments received don't match, need reconfiguration")
+          break
 
+      res = self.replicaKM[tail_id].verify(resultStatements[i-1]).decode('utf-8').split(';')[1]
+      if(res == 'OK'):
+        output("Get Successful")
+      else:
+        output("Get unsuccessful. No such key in database.")
+
+    else:
+      output("Old response received, dropping it")
     flag = flag + 1
 
   def receive(msg=('slice_result', resultShuttle ,requestID), from_=tail_id):
-    for key in resultShuttle:
-      resultStatements = resultShuttle[key]
-      for i in range(0, (len(resultStatements) - 1)):
-        if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
-          output("error")
-      if(resultStatements[i].split(';')[1] != "FAIL"):
-        output("Split successful")
+    if((requestID in self.RTRequest) == False):
+      resultStatements = resultShuttle[requestID]
+      i = 0
+      for key in self.replicaKM:
+        try:
+          self.replicaKM[key].verify(resultStatements[i])
+          i = i + 1
+        except:
+          output("Something is wrongs")
+      res = self.replicaKM[tail_id].verify(resultStatements[i-1]).decode('utf-8').split(';')[1]
+      if(res == 'OK'):
+        output("Slice was successful")
       else:
-        output("Split unsuccessful as key is not present.")
+        output("Slice was unsuccessful")
+    else:
+      output("Old response received, dropping it")
     flag = flag + 1
 
   def receive(msg=('append_result', resultShuttle ,requestID), from_=tail_id):
-    for key in resultShuttle:
-      resultStatements = resultShuttle[key]
-      for i in range(0, (len(resultStatements) - 1)):
-        if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
-          output("error")
-      if(resultStatements[i].split(';')[1] != "FAIL"):
-        output("Append successful")
+    if((requestID in self.RTRequest) == False):
+      resultStatements = resultShuttle[requestID]
+      i = 0
+      for key in self.replicaKM:
+        try:
+          self.replicaKM[key].verify(resultStatements[i])
+          i = i + 1
+        except:
+          output("Something is wrongs")
+      res = self.replicaKM[tail_id].verify(resultStatements[i-1]).decode('utf-8').split(';')[1]
+      if(res == 'OK'):
+        output("Append was successful")
       else:
-        output("Append unsuccessful as key is not present.")
+        output("Append was unsuccessful")
+    else:
+      output("Old response received, dropping it")
     flag = flag + 1
 
   def receive(msg=('currentConfig', replicas), from_=olympus_id):
@@ -116,6 +171,10 @@ class Client(process):
   def receive(msg = ('dict_reply', db), from_ = p_id):
     output("Current State: ", db)
     flag = flag + 1
+
+  def receive(msg = ('generated_key', pri_key), from_ = oly):
+    self.private_key = pri_key
+    self.flag = 1
 
   def getArguments(key_val):
     args_t = key_val.split(',')
@@ -132,7 +191,7 @@ class Client(process):
     random.seed(seed)
     ind = [x%4 for x in random.sample(range(nOps * 2), nOps)]
     listops = [operations[x] for x in ind]
-    ind = [x for x in random.sample(range(20000), nOps * 3)]
+    ind = [x for x in random.sample(range(20000), 12)]
     act_words = [words[x] for x in ind]
     #random.seed(None)
     workload = ""

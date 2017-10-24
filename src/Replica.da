@@ -1,18 +1,31 @@
+import time
+
 class Replica(process):
 
-  def setup(conf, head, tail, olympus):
+  def setup(conf, head, tail, pri_key, olympus):
     self.db = {}
     self.state = "ACTIVE"
     self.isHead = head
     self.isTail = tail
+    self.headReplica = None
     self.successor = self
     self.predecessor = self
     self.History = {}
     self.current_slot = 0
     self.resultCache = {}
+    self.retran_flag = 0
+    self.ReTransmittedRequest = []
+    self.privateKey =  pri_key
+    self.replicaKM = {}
+    self.clientKM = {}
+    self.flag = 0
+
 
   def run():
-    send(('get_successor_predecessor'), to = olympus)
+    send(('get_chain_info'), to = olympus)
+    await(self.flag == 1)
+    self.flag = 0
+    send(('get_public_key_maps'), to = olympus)
     await(False)
 
   def get_slot_number():
@@ -39,11 +52,30 @@ class Replica(process):
 
   def verifyOrderProof(orderProof, requestID):
     orderStatements = orderProof[requestID]
-    for i in range(0, (len(orderStatements) - 1)):
-      if( orderStatements[i].split(';')[1:] != orderStatements[i+1].split(';')[1:] ):
-        return False
-    return True
+    #for i in range(0, (len(orderStatements) - 1)):
+    #  if( orderStatements[i].split(';')[1:] != orderStatements[i+1].split(';')[1:] ):
+    #    return False
+    #return True
+    i = 0
+    for key in self.replicaKM:
+      if(i < len(orderStatements)):
+        try:
+          replicaKM[key].verify(orderStatements[i])
+        except:
+          output("Bad or corrupted key.")
+          return False
+      else:
+        return True
+        break
+      i = i + 1
 
+  def receive(msg = ('public_key_maps', cKM, rKM), from_ = olympus):
+    self.replicaKM = rKM
+    self.clientKM = cKM
+
+  def encodeStatement(statement):
+    enc_s = self.privateKey.sign(bytes(statement,'utf-8'))
+    return enc_s
 
   def receive(msg = ('put', k_v, client_id, requestID), from_=p_id):
     if(self.state == "ACTIVE"):
@@ -53,26 +85,31 @@ class Replica(process):
           os = orderCommand(slot, 'put', k_v)
           if(os != 'error'):
             self.History[requestID] = os
+          enc_os = encodeStatement(os)
           self.db[k_v[0]] = k_v[1]
           orderProof = {}
-          orderProof[requestID] = [os]
+          orderProof[requestID] = [enc_os]
           result_statement = ""
-          result_statement = str(self) + ";" + "OK"
+          result_statement = encodeStatement(str(self) + ";" + "OK")
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
           send(('put', k_v, client_id, requestID, OrderShuttle), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
-          x = 1
+          output("replica says retransmissoin")
 
       else:
-        output("operation already present in history")
         if(requestID in self.resultCache) :
           send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
 
         else:
-          output("Handle the case where its retransmission and you still haven't received the result shuttle I guess")
+          self.retran_flag = 0
+          self.ReTransmittedRequest.append(requestID)
+          if await(self.retran_flag == 1):
+            self.retran_flag = 0
+          elif timeout(conf['head_timeout']/1000):
+            output("Retransmission timeout. Needs reconfiguration")
 
     else:
       output("Replica is immutable")
@@ -84,10 +121,11 @@ class Replica(process):
         os = orderCommand(slot, 'put', k_v)
         if(os != 'error'):
           self.History[requestID] = os
+        enc_os = encodeStatement(os)
         self.db[k_v[0]] = k_v[1]
-        OrderShuttle[0][requestID].append(os)
+        OrderShuttle[0][requestID].append(enc_os)
         result_statement = ""
-        result_statement = str(self) + ";" + "OK"
+        result_statement = encodeStatement(str(self) + ";" + "OK")
         OrderShuttle[1][requestID].append(result_statement)
         if(isTail != True):
           send(('put', k_v, client_id, requestID, OrderShuttle), to = self.successor)
@@ -105,13 +143,14 @@ class Replica(process):
           os = orderCommand(slot, 'get', [key])
           if(os != 'error'):
             self.History[requestID] = os
+          enc_os = encodeStatement(os)
           orderProof = {}
-          orderProof[requestID] = [os]
+          orderProof[requestID] = [enc_os]
           result_statement = ""
           if(key in self.db):
-            result_statement = str(self) + ";" + self.db[key]
+            result_statement = encodeStatement(str(self) + ";" + self.db[key])
           else:
-            result_statement = str(self) + ";"
+            result_statement = encodeStatement(str(self) + ";")
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
@@ -126,7 +165,12 @@ class Replica(process):
           send(('get_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
 
         else:
-          output("Handle the case where its retransmission and you still haven't received the result shuttle I guess")
+          self.retran_flag = 0
+          self.ReTransmittedRequest.append(requestID)
+          if await(self.retran_flag == 1):
+            self.retran_flag = 0
+          elif timeout(conf['head_timeout']/1000):
+            output("Retransmission timeout. Needs reconfiguration")
 
     else:
       output("Replica is immutable")
@@ -138,12 +182,13 @@ class Replica(process):
         os = orderCommand(slot, 'get', [key])
         if(os != 'error'):
           self.History[requestID] = os
-        OrderShuttle[0][requestID].append(os)
+        enc_os = encodeStatement(os)
+        OrderShuttle[0][requestID].append(enc_os)
         result_statement = ""
         if(key in self.db):
-          result_statement = str(self) + ";" + self.db[key]
+          result_statement = encodeStatement(str(self) + ";" + self.db[key])
         else:
-          result_statement = str(self) + ";"
+          result_statement = encodeStatement(str(self) + ";")
         OrderShuttle[1][requestID].append(result_statement)
         if(isTail != True):
           send(('get', key, client_id, requestID, OrderShuttle), to = self.successor)
@@ -162,7 +207,8 @@ class Replica(process):
           if(os != 'error'):
             self.History[requestID] = os
           orderProof = {}
-          orderProof[requestID] = [os]
+          enc_os = encodeStatement(os)
+          orderProof[requestID] = [enc_os]
           result_statement = ""
 
           (start, end) = args[1].split(':')
@@ -171,11 +217,11 @@ class Replica(process):
             if((int(start) >= 0) and (int(end) <= len(val))):
               val = val[int(start):int(end)]
               self.db[args[0]] = val
-              result_statement = str(self) + ';' + "OK"
+              result_statement = encodeStatement(str(self) + ';' + "OK")
             else:
-              result_statement = str(self) + ';' + "FAIL"
+              result_statement = encodeStatement(str(self) + ';' + "FAIL")
           else:
-            result_statement = str(self) + ';' + "FAIL"
+            result_statement = encodeStatement(str(self) + ';' + "FAIL")
 
           resultProof = {}
           resultProof[requestID] = [result_statement]
@@ -191,7 +237,12 @@ class Replica(process):
           send(('slice_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
 
         else:
-          output("Handle the case where its retransmission and you still haven't received the result shuttle I guess")
+          self.retran_flag = 0
+          self.ReTransmittedRequest.append(requestID)
+          if await(self.retran_flag == 1):
+            self.retran_flag = 0
+          elif timeout(conf['head_timeout']/1000):
+            output("Retransmission timeout. Needs reconfiguration")
 
     else:
       output("Replica is immutable")
@@ -203,7 +254,8 @@ class Replica(process):
         os = orderCommand(slot, 'slice', args)
         if(os != 'error'):
           self.History[requestID] = os
-        OrderShuttle[0][requestID].append(os)
+        enc_os = encodeStatement(os)
+        OrderShuttle[0][requestID].append(enc_os)
         result_statement = ""
 
         (start, end) = args[1].split(':')
@@ -212,11 +264,11 @@ class Replica(process):
           if((int(start) >= 0) and (int(end) <= len(val))):
             val = val[int(start):int(end)]
             self.db[args[0]] = val
-            result_statement = str(self) + ';' + "OK"
+            result_statement = encodeStatement(str(self) + ';' + "OK")
           else:
-            result_statement = str(self) + ';' + "FAIL"
+            result_statement = encodeStatement(str(self) + ';' + "FAIL")
         else:
-          result_statement = str(self) + ';' + "FAIL"
+          result_statement = encodeStatement(str(self) + ';' + "FAIL")
 
         OrderShuttle[1][requestID].append(result_statement)
         if(isTail != True):
@@ -236,15 +288,16 @@ class Replica(process):
           if(os != 'error'):
             self.History[requestID] = os
           orderProof = {}
-          orderProof[requestID] = [os]
+          enc_os = encodeStatement(os)
+          orderProof[requestID] = [enc_os]
           result_statement = ""
           if(args[0] in self.db):
             val = self.db[args[0]]
             val = val + " " + args[1]
             self.db[args[0]] = val
-            result_statement = str(self) + ';' + "OK"
+            result_statement = encodeStatement(str(self) + ';' + "OK")
           else:
-            result_statement = str(self) + ';' + "FAIL"
+            result_statement = encodeStatement(str(self) + ';' + "FAIL")
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
@@ -259,7 +312,12 @@ class Replica(process):
           send(('get_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
 
         else:
-          output("Handle the case where its retransmission and you still haven't received the result shuttle I guess")
+          self.retran_flag = 0
+          self.ReTransmittedRequest.append(requestID)
+          if await(self.retran_flag == 1):
+            self.retran_flag = 0
+          elif timeout(conf['head_timeout']/1000):
+            output("Retransmission timeout. Needs reconfiguration")
 
     else:
       output("Replica is immutable")
@@ -271,15 +329,16 @@ class Replica(process):
         os = orderCommand(slot, 'append', args)
         if(os != 'error'):
           self.History[requestID] = os
-        OrderShuttle[0][requestID].append(os)
+        enc_os = encodeStatement(os)
+        OrderShuttle[0][requestID].append(enc_os)
         result_statement = ""
         if(args[0] in self.db):
           val = self.db[args[0]]
           val = val + " " + args[1]
           self.db[args[0]] = val
-          result_statement = str(self) + ';' + "OK"
+          result_statement = encodeStatement(str(self) + ';' + "OK")
         else:
-          result_statement = str(self) + ';' + "FAIL"
+          result_statement = encodeStatement(str(self) + ';' + "FAIL")
         OrderShuttle[1][requestID].append(result_statement)
         if(isTail != True):
           send(('append', args, client_id, requestID, OrderShuttle), to = self.successor)
@@ -294,17 +353,32 @@ class Replica(process):
 
   def receive(msg = ('result_back', result_shuttle, requestID), from_ = p_id):
     cond = True
-    for key in result_shuttle:
-      resultStatements = result_shuttle[key]
-      for i in range(0, (len(resultStatements) - 1)):
-        if(resultStatements[i].split(';')[1] != resultStatements[i+1].split(';')[1]):
-          cond = False
-          break
+    resultStatements = result_shuttle[requestID]
+    i = 0
+    for key in self.replicaKM:
+      try:
+        self.replicaKM[key].verify(resultStatement[i])
+        i = i + 1
+      except:
+        cond = False
+        break
+
     if(cond == True):
-      self.resultCache[requestID] = result_shuttle[requestID]
+      if(requestID in self.ReTransmittedRequest):
+        output("Sending back the response of retransmitted request to : CLIENT")
+        self.resultCache[requestID] = result_shuttle[requestID]
+        if(isHead == False):
+          send(('result_back', result_shuttle, requestID), to = self.predecessor)
+        self.retran_flag = 1
+      else:
+        self.resultCache[requestID] = result_shuttle[requestID]
+        if(isHead == False):
+          send(('result_back', result_shuttle, requestID), to = self.predecessor)
     #for key in self.resultCache :
     #  output(key, self.resultCache[key])
 
-  def receive(msg=('val_successor_predecessor', p, s), from_ = olympus):
+  def receive(msg=('val_chain_info', p, s, head), from_ = olympus):
     self.successor = s
     self.predecessor = p
+    self.headReplica = head
+    self.flag = 1
