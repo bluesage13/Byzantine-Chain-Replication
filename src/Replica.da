@@ -1,6 +1,17 @@
 import time
+import collections
+import sys
+import logging
 
 class Replica(process):
+  def get_logger(name, filename):
+    formatter = logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    hld = logging.FileHandler(filename, mode='a')
+    hld.setFormatter(formatter)
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(hld)
+    return logger
 
   def setup(conf, head, tail, pri_key, cni, failures, olympus):
     self.db = {}
@@ -19,38 +30,129 @@ class Replica(process):
     self.replicaKM = {}
     self.clientKM = {}
     self.flag = 0
-    self.cr_cnt = {}
-    self.cr_trig = {}
-    self.fr_cnt = {}
-    self.fr_trig = {}
-    self.s_cnt = {}
-    self.s_trig = {}
-    self.sh_cnt = {}
-    self.sh_trig = {}
     self.client_num_id = cni
     self.failures = failures
+    self.failure_map = collections.defaultdict(dict)
+    self.fail_flag = False
+    self.curr_fail_op = ""
+    self.logger = None
 
   def run():
+    self.logger = get_logger('replica', conf['test_case_name']+'_r.txt')
+    logger.info(str(self) + " Getting chain info from olympus")
     send(('get_chain_info'), to = olympus)
     await(self.flag == 1)
     self.flag = 0
+    logger.info(str(self) + " getting public key maps from olympus")
     send(('get_public_key_maps'), to = olympus)
-    #jtorasakar
+    logger.info(str(self) + " Parsing failures")
     parse_failures()
+    logger.info(str(self) + " " + str(self.failures))
+    output(self, self.failures)
     await(False)
 
-  def parse_failures():
-    #jtorasakar : Here you should write the function. I have already created the variables for you. you just have to operate on self.failures
-    #and fill the variables self.cr_cnt, self.cr_trig and below. For client_id to number matching you have to use self.client_num_id{}
-    #its a map {<clientid> : <client_num>}
-    #to run the code copy all you have to run the command "python3 -m da startup.da" in the src folder.
-    #Instead what you can do is copy: Olympus.da Replica.da Client.da startup.da config.txt(from config folder) to another location so you dont have to worry about the
-    #paths. once you copy them to a location. go to the location and run the above command. you will see something like this in the output:
-    #[347] Replica.Replica<Replica:1d804>:OUTPUT: ['client_request(2,1), crash()'] -> see in config.txt
-    #[347] Replica.Replica<Replica:1d806>:OUTPUT: None
-    #[349] Replica.Replica<Replica:1d805>:OUTPUT: None
+  def parseFString(t):
+    tg = ""
+    cnum = ""
+    rnum = ""
+    fl = "trig"
+    for c in t:
+      if(fl == "trig"):
+        if c != '(':
+          tg = tg + c
+        else:
+          fl = "cnum"
+          continue
 
-    output(self.failures)
+      elif(fl == "cnum"):
+        if c != ',':
+          cnum = cnum + c
+        else:
+          fl = "rnum"
+          continue
+
+      elif(fl == "rnum"):
+        if c != ')':
+          rnum = rnum + c
+        else:
+          break
+
+    return (tg.strip(), int(cnum), int(rnum))
+
+  def getFailure(fl):
+    f = ""
+    for c in fl:
+      if(c != '('):
+        f = f + c
+      else:
+        break
+    return f.strip()
+
+  def parse_failures():
+    if(self.failures != None):
+      for elem in self.failures:
+        elem = elem.split(',')
+        t = (elem[0] +','+ elem[1]).strip()
+        f = elem[2].strip()
+        (t_name, t_cli, t_r_num ) = parseFString(t)
+        t_f = getFailure(f)
+        client_id = client_num_id[t_cli]
+        #if(str(client_id) in self.failure_map and t_name in self.failure_map[str(client_id)]):
+        #  self.failure_map[str(client_id)][t_name].append((t_r_num, t_f))
+        #else:
+        self.failure_map[str(client_id)][t_name] = [t_r_num, t_f]
+
+  def check_if_failure(client_id, f_type):
+    if(self.failures != None and (client_id in self.failure_map) and (f_type in self.failure_map[client_id])):
+      if(f_type == "client_request"):
+        req_num_max = self.failure_map[client_id][f_type][0]
+        if(req_num_max - 1 == 0):
+          req_num_max = req_num_max - 1
+          self.failure_map[client_id][f_type][0] = req_num_max
+          self.curr_fail_op = self.failure_map[client_id][f_type][1]
+          return True
+        else:
+          req_num_max = req_num_max - 1
+          self.failure_map[client_id][f_type][0] = req_num_max
+        return False
+
+      elif(f_type == "forwarded_request" and (client_id in self.failure_map) and (f_type in self.failure_map[client_id])):
+        req_num_max = self.failure_map[client_id][f_type][0]
+        if(req_num_max - 1 == 0):
+          req_num_max = req_num_max - 1
+          self.failure_map[client_id][f_type][0] = req_num_max
+          self.curr_fail_op = self.failure_map[client_id][f_type][1]
+          return True
+        else:
+          req_num_max = req_num_max - 1
+          self.failure_map[client_id][f_type][0] = req_num_max
+        return False
+
+      elif(f_type == "result_shuttle" and (client_id in self.failure_map) and (f_type in self.failure_map[client_id])):
+        req_num_max = self.failure_map[client_id][f_type][0]
+        if(req_num_max - 1 == 0):
+          req_num_max = req_num_max - 1
+          self.failure_map[client_id][f_type][0] = req_num_max
+          self.curr_fail_op = self.failure_map[client_id][f_type][1]
+          return True
+        else:
+          req_num_max = req_num_max - 1
+          self.failure_map[client_id][f_type][0] = req_num_max
+        return False
+
+      elif(f_type == "shuttle" and (client_id in self.failure_map) and (f_type in self.failure_map[client_id])):
+        req_num_max = self.failure_map[client_id][f_type][0]
+        if(req_num_max - 1 == 0):
+          req_num_max = req_num_max - 1
+          self.failure_map[client_id][f_type][0] = req_num_max
+          self.curr_fail_op = self.failure_map[client_id][f_type][1]
+          return True
+        else:
+          req_num_max = req_num_max - 1
+          self.failure_map[client_id][f_type][0] = req_num_max
+        return False
+    else:
+      return False
 
   def get_slot_number():
     s = self.current_slot
@@ -74,6 +176,15 @@ class Replica(process):
         return "error"
     return os
 
+  def getCorruptStatement(s, o, args):
+    os = str(self);
+    os = os + ';' + str(s)
+    os = os + ';' + o
+    for arg in args:
+      os = os + ';' + arg
+
+    return os
+
   def verifyOrderProof(orderProof, requestID):
     orderStatements = orderProof[requestID]
     #for i in range(0, (len(orderStatements) - 1)):
@@ -82,9 +193,15 @@ class Replica(process):
     #return True
     i = 0
     for key in self.replicaKM:
+      prev = replicaKM[key].verify(orderStatements[0])
+      break
+    prev = prev.decode('utf-8').split(str(key))[1]
+    for key in self.replicaKM:
       if(i < len(orderStatements)):
         try:
-          replicaKM[key].verify(orderStatements[i])
+          t = replicaKM[key].verify(orderStatements[i]).decode('utf-8').split(str(key))[1]
+          if(prev != t):
+            return False
         except:
           output("Bad or corrupted key.")
           return False
@@ -102,128 +219,266 @@ class Replica(process):
     return enc_s
 
   def receive(msg = ('put', k_v, client_id, requestID), from_=p_id):
+    cmd = 'put('+k_v[0]+','+(k_v[1])+')'
+    logger.info(str(self) + " Received " + cmd + "from" + str(p_id))
     if(self.state == "ACTIVE"):
+      fail_flag = check_if_failure(str(client_id), "client_request")
       if(checkIfRidPresentInHistory(requestID) == False):
         if(self.isHead):
           slot = get_slot_number()
           os = orderCommand(slot, 'put', k_v)
           if(os != 'error'):
             self.History[requestID] = os
-          enc_os = encodeStatement(os)
+          logger.info(str(self) + " The order statement for " + requestID + " is " + os)
+          if(fail_flag == True and self.curr_fail_op == "change_operation"):
+            #injecting Change_operation Failure
+            logger.info(str(self) + " Injecting the change_operation failure")
+            output("injecting Change_operation Failure")
+            os = getCorruptStatement(slot, 'get', ['x'])
+            enc_os = encodeStatement(os)
+            self.curr_fail_op = ""
+          else:
+            enc_os = encodeStatement(os)
+
           self.db[k_v[0]] = k_v[1]
           orderProof = {}
           orderProof[requestID] = [enc_os]
           result_statement = ""
           result_statement = encodeStatement(str(self) + ";" + "OK")
+          #Injecting the change result failure
+
+          if(fail_flag == True and self.curr_fail_op == "change_result"):
+            logger.info(str(self) + " Injecting the change_result failure")
+            output("injecting change_result Failure")
+            result_statement = encodeStatement(str(self) + ";" + "OK")
+            self.curr_fail_op = ""
+
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
+          #injecting the drop result statement failure
+          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
+            logger.info(str(self) + " Injecting drop_result_statement failure")
+            output("injecting drop_result_statement Failure")
+            OrderShuttle[1][requestID].pop(0)
+            self.curr_fail_op = ""
           send(('put', k_v, client_id, requestID, OrderShuttle), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
           output("replica says retransmissoin")
 
       else:
+        logger.info(str(self) + " received the broadcast from client.")
         if(requestID in self.resultCache) :
+          logger.info(str(self) + " the result shuttle for broadcasted operation present in history. sending it to client :" + str(client_id))
           send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
 
         else:
+          logger.info(str(self)+" result is not in cache")
           self.retran_flag = 0
           self.ReTransmittedRequest.append(requestID)
+          logger.info(str(self)+" waiting for the result shuttle to come back")
           if await(self.retran_flag == 1):
+            logger.info(str(self) + " the result shuttle for broadcasted operation  received. sending it to client :" + str(client_id))
+            send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
             self.retran_flag = 0
           elif timeout(conf['head_timeout']/1000):
+            logger.info(str(self) + " timed out. Becomes immutable and sends the reconfiguration request to olympus")
             output("Retransmission timeout. Needs reconfiguration")
 
     else:
       output("Replica is immutable")
 
   def receive(msg = ('put', k_v, client_id, requestID, OrderShuttle), from_=p_id):
-    if(isHead != True):
-      if(verifyOrderProof(OrderShuttle[0], requestID) == True):
-        slot = get_slot_number()
-        os = orderCommand(slot, 'put', k_v)
-        if(os != 'error'):
-          self.History[requestID] = os
-        enc_os = encodeStatement(os)
-        self.db[k_v[0]] = k_v[1]
-        OrderShuttle[0][requestID].append(enc_os)
-        result_statement = ""
-        result_statement = encodeStatement(str(self) + ";" + "OK")
-        OrderShuttle[1][requestID].append(result_statement)
-        if(isTail != True):
-          send(('put', k_v, client_id, requestID, OrderShuttle), to = self.successor)
+    cmd = 'put(' +k_v[0]+','+k_v[1]+')'
+    logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
+    if(self.state == "ACTIVE"):
+
+      fail_flag = check_if_failure(str(client_id), "forwarded_request")
+      if(fail_flag == False):
+        fail_flag = check_if_failure(str(client_id), "shuttle")
+      if(isHead != True):
+        if(verifyOrderProof(OrderShuttle[0], requestID) == True):
+          slot = get_slot_number()
+          os = orderCommand(slot, 'put', k_v)
+          if(os != 'error'):
+            self.History[requestID] = os
+          logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
+          if(fail_flag == True and self.curr_fail_op == "change_operation"):
+            #injecting change_operation Failure
+            logger.info(str(self) + " injecting the change_operation failure")
+            output("injecting change_operation Failure")
+            os = getCorruptStatement(slot, 'get', ['x'])
+            enc_os = encodeStatement(os)
+            self.curr_fail_op = ""
+          else:
+            enc_os = encodeStatement(os)
+
+          self.db[k_v[0]] = k_v[1]
+          OrderShuttle[0][requestID].append(enc_os)
+          result_statement = ""
+          result_statement = encodeStatement(str(self) + ";" + "OK")
+          #Injecting the change result failure
+
+          if(fail_flag == True and self.curr_fail_op == "change_result"):
+            output("injecting change_result Failure")
+            result_statement = encodeStatement(str(self) + ";" + "OK")
+            self.curr_fail_op = ""
+
+          OrderShuttle[1][requestID].append(result_statement)
+          #injecting the drop result statement failure
+          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
+            logger.info(str(self) + " Injecting the drop_result_statement failure")
+            output("injecting drop_result_statement Failure")
+            OrderShuttle[1][requestID].pop(0)
+            self.curr_fail_op = ""
+          if(isTail != True):
+            logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
+            send(('put', k_v, client_id, requestID, OrderShuttle), to = self.successor)
+          else:
+            logger.info(str(self) + " sending the result shuttle to client: " + str(client_id))
+            send(('put_result', OrderShuttle[1], requestID), to = client_id)
+            logger.info(str(self) + " send the result shuttle back in the chain to: " + str(self.predecessor))
+            send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
         else:
-          send(('put_result', OrderShuttle[1], requestID), to = client_id)
-          send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
-      else:
-        output("Dropping invalid request")
+          logger.info(str(self) + " There orderProof is not correct. Becoming IMMUTABLE and sending reconfiguration request to olympus")
+          output("Dropping invalid request")
 
   def receive(msg=('get', key, client_id, requestID), from_=p_id):
+    cmd = 'get(' +key+')'
+    logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == "ACTIVE"):
+      fail_flag = check_if_failure(str(client_id), "client_request")
       if(checkIfRidPresentInHistory(requestID) == False):
         if(self.isHead):
           slot = get_slot_number()
           os = orderCommand(slot, 'get', [key])
           if(os != 'error'):
             self.History[requestID] = os
-          enc_os = encodeStatement(os)
+          logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
+          if(fail_flag == True and self.curr_fail_op == "change_operation"):
+            #injecting Change_operation Failure
+            logger.info(str(self) + " injecting the change_operation failure")
+            output("injecting Change_operation Failure")
+            os = getCorruptStatement(slot, 'get', ['x'])
+            enc_os = encodeStatement(os)
+            self.curr_fail_op = ""
+          else:
+            enc_os = encodeStatement(os)
+
           orderProof = {}
           orderProof[requestID] = [enc_os]
           result_statement = ""
-          if(key in self.db):
-            result_statement = encodeStatement(str(self) + ";" + self.db[key])
+
+          #Injecting the change result failure
+
+          if(fail_flag == True and self.curr_fail_op == "change_result"):
+            logger.info(str(self) + " injecting the change_result failure")
+            output("injecting change_result Failure")
+            result_statement = encodeStatement(str(self) + ";" + "OK")
+            self.curr_fail_op = ""
           else:
-            result_statement = encodeStatement(str(self) + ";")
+            if(key in self.db):
+              result_statement = encodeStatement(str(self) + ";" + self.db[key])
+            else:
+              result_statement = encodeStatement(str(self) + ";")
+
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
+          #injecting the drop result statement failure
+
+          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
+            logger.info(str(self) + " injecting the drop_result_statement failure")
+            output("injecting drop_result_statement Failure")
+            OrderShuttle[1][requestID].pop(0)
+            self.curr_fail_op = ""
+          logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
           send(('get', key, client_id, requestID, OrderShuttle), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
           x = 1
 
       else:
-        output("operation already present in history")
-        if(requestID in self.resultCache) :
-          send(('get_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
-
-        else:
+        logger.info(str(self)+" result is not in cache")
+        self.retran_flag = 0
+        self.ReTransmittedRequest.append(requestID)
+        logger.info(str(self)+" waiting for the result shuttle to come back")
+        if await(self.retran_flag == 1):
+          logger.info(str(self) + " the result shuttle for broadcasted operation  received. sending it to client :" + str(client_id))
+          send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
           self.retran_flag = 0
-          self.ReTransmittedRequest.append(requestID)
-          if await(self.retran_flag == 1):
-            self.retran_flag = 0
-          elif timeout(conf['head_timeout']/1000):
-            output("Retransmission timeout. Needs reconfiguration")
-
+        elif timeout(conf['head_timeout']/1000):
+          logger.info(str(self) + " timed out. Becomes immutable and sends the reconfiguration request to olympus")
+          output("Retransmission timeout. Needs reconfiguration")
     else:
       output("Replica is immutable")
 
   def receive(msg = ('get', key, client_id, requestID, OrderShuttle), from_=p_id):
-    if(isHead != True):
-      if(verifyOrderProof(OrderShuttle[0], requestID) == True):
-        slot = get_slot_number()
-        os = orderCommand(slot, 'get', [key])
-        if(os != 'error'):
-          self.History[requestID] = os
-        enc_os = encodeStatement(os)
-        OrderShuttle[0][requestID].append(enc_os)
-        result_statement = ""
-        if(key in self.db):
-          result_statement = encodeStatement(str(self) + ";" + self.db[key])
+    cmd = 'get(' +key+')'
+    logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
+    if(self.state == 'ACTIVE'):
+      fail_flag = check_if_failure(str(client_id), "forwarded_request")
+      if(fail_flag == False):
+        fail_flag = check_if_failure(str(client_id), "shuttle")
+      if(isHead != True):
+        if(verifyOrderProof(OrderShuttle[0], requestID) == True):
+          slot = get_slot_number()
+          os = orderCommand(slot, 'get', [key])
+          if(os != 'error'):
+            self.History[requestID] = os
+          logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
+          if(fail_flag == True and self.curr_fail_op == "change_operation"):
+            #injecting Change_operation Failure
+            logger.info(str(self) + " Injecting the change_operation failure")
+            output("injecting Change_operation Failure")
+            os = getCorruptStatement(slot, 'get', ['x'])
+            enc_os = encodeStatement(os)
+            self.curr_fail_op = ""
+          else:
+            enc_os = encodeStatement(os)
+
+          OrderShuttle[0][requestID].append(enc_os)
+          result_statement = ""
+
+          #Injecting the change result failure
+
+          if(fail_flag == True and self.curr_fail_op == "change_result"):
+            logger.info(str(self) + " Injecting the change_result failure")
+            output("injecting change_result Failure")
+            result_statement = encodeStatement(str(self) + ";" + "OK")
+            self.curr_fail_op = ""
+          else:
+            if(key in self.db):
+              result_statement = encodeStatement(str(self) + ";" + self.db[key])
+            else:
+              result_statement = encodeStatement(str(self) + ";")
+
+          OrderShuttle[1][requestID].append(result_statement)
+          #injecting the drop result statement failure
+
+          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
+            logger.info(str(self) + " Injecting the drop_result_statement failure")
+            output("injecting drop_result_statement Failure")
+            OrderShuttle[1][requestID].pop(0)
+            self.curr_fail_op = ""
+          if(isTail != True):
+            logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
+            send(('get', key, client_id, requestID, OrderShuttle), to = self.successor)
+          else:
+            logger.info(str(self) + " sending order shuttle forward to " + str(client_id))
+            send(('get_result', OrderShuttle[1], requestID), to = client_id)
+            logger.info(str(self) + " sending result shuttle forward to " + str(self.predecessor))
+            send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
         else:
-          result_statement = encodeStatement(str(self) + ";")
-        OrderShuttle[1][requestID].append(result_statement)
-        if(isTail != True):
-          send(('get', key, client_id, requestID, OrderShuttle), to = self.successor)
-        else:
-          send(('get_result', OrderShuttle[1], requestID), to = client_id)
-          send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
-      else:
-        output("Dropping invalid request")
+          logger.info(str(self) + " There orderProof is not correct. Becoming IMMUTABLE and sending reconfiguration request to olympus")
+          output("Dropping invalid request")
 
   def receive(msg=('slice', args, client_id, requestID), from_=p_id):
+    cmd = 'slice(' +str(args)+')'
+    logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == "ACTIVE"):
+      fail_flag = check_if_failure(str(client_id), "client_request")
       if(checkIfRidPresentInHistory(requestID) == False):
         if(self.isHead):
           slot = get_slot_number()
@@ -231,7 +486,17 @@ class Replica(process):
           if(os != 'error'):
             self.History[requestID] = os
           orderProof = {}
-          enc_os = encodeStatement(os)
+          logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
+          if(fail_flag == True and self.curr_fail_op == "change_operation"):
+            #injecting Change_operation Failure
+            logger.info(str(self) + " Injecting the change_operation failure")
+            output("injecting Change_operation Failure")
+            os = getCorruptStatement(slot, 'get', ['x'])
+            enc_os = encodeStatement(os)
+            self.curr_fail_op = ""
+          else:
+            enc_os = encodeStatement(os)
+
           orderProof[requestID] = [enc_os]
           result_statement = ""
 
@@ -247,64 +512,116 @@ class Replica(process):
           else:
             result_statement = encodeStatement(str(self) + ';' + "FAIL")
 
+          #Injecting the change result failure
+
+          if(fail_flag == True and self.curr_fail_op == "change_result"):
+            logger.info(str(self) + " Injecting the change_result failure")
+            output("injecting change_result Failure")
+            result_statement = encodeStatement(str(self) + ";" + "OK")
+            self.curr_fail_op = ""
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
+          #injecting the drop result statement failure
+
+          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
+            logger.info(str(self) + " Injecting the drop_result_statement failure")
+            output("injecting drop_result_statement Failure")
+            OrderShuttle[1][requestID].pop(0)
+            self.curr_fail_op = ""
+          logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
           send(('slice', args, client_id, requestID, OrderShuttle), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
           x = 1
 
       else:
-        output("Already Present in History")
-        if(requestID in self.resultCache) :
-          send(('slice_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
-
-        else:
+        logger.info(str(self)+" result is not in cache")
+        self.retran_flag = 0
+        self.ReTransmittedRequest.append(requestID)
+        logger.info(str(self)+" waiting for the result shuttle to come back")
+        if await(self.retran_flag == 1):
+          logger.info(str(self) + " the result shuttle for broadcasted operation  received. sending it to client :" + str(client_id))
+          send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
           self.retran_flag = 0
-          self.ReTransmittedRequest.append(requestID)
-          if await(self.retran_flag == 1):
-            self.retran_flag = 0
-          elif timeout(conf['head_timeout']/1000):
-            output("Retransmission timeout. Needs reconfiguration")
+        elif timeout(conf['head_timeout']/1000):
+          logger.info(str(self) + " timed out. Becomes immutable and sends the reconfiguration request to olympus")
+          output("Retransmission timeout. Needs reconfiguration")
 
     else:
       output("Replica is immutable")
 
   def receive(msg=('slice', args, client_id, requestID, OrderShuttle), from_=p_id):
-    if(isHead != True):
-      if(verifyOrderProof(OrderShuttle[0], requestID) == True):
-        slot = get_slot_number()
-        os = orderCommand(slot, 'slice', args)
-        if(os != 'error'):
-          self.History[requestID] = os
-        enc_os = encodeStatement(os)
-        OrderShuttle[0][requestID].append(enc_os)
-        result_statement = ""
+    cmd = 'slice(' +str(args)+')'
+    logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
+    if(self.state == "ACTIVE"):
+      fail_flag = check_if_failure(str(client_id), "forwarded_request")
+      if(fail_flag == False):
+        fail_flag = check_if_failure(str(client_id), "shuttle")
+      if(isHead != True):
+        if(verifyOrderProof(OrderShuttle[0], requestID) == True):
+          slot = get_slot_number()
+          os = orderCommand(slot, 'slice', args)
+          if(os != 'error'):
+            self.History[requestID] = os
+          logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
+          if(fail_flag == True and self.curr_fail_op == "change_operation"):
+            #injecting Change_operation Failure
+            logger.info(str(self) + " Injecting the change_operation failure")
+            output("injecting Change_operation Failure")
+            os = getCorruptStatement(slot, 'get', ['x'])
+            enc_os = encodeStatement(os)
+            self.curr_fail_op = ""
+          else:
+            enc_os = encodeStatement(os)
 
-        (start, end) = args[1].split(':')
-        if(args[0] in self.db):
-          val = self.db[args[0]]
-          if((int(start) >= 0) and (int(end) <= len(val))):
-            val = val[int(start):int(end)]
-            self.db[args[0]] = val
-            result_statement = encodeStatement(str(self) + ';' + "OK")
+          OrderShuttle[0][requestID].append(enc_os)
+          result_statement = ""
+
+          (start, end) = args[1].split(':')
+          if(args[0] in self.db):
+            val = self.db[args[0]]
+            if((int(start) >= 0) and (int(end) <= len(val))):
+              val = val[int(start):int(end)]
+              self.db[args[0]] = val
+              result_statement = encodeStatement(str(self) + ';' + "OK")
+            else:
+              result_statement = encodeStatement(str(self) + ';' + "FAIL")
           else:
             result_statement = encodeStatement(str(self) + ';' + "FAIL")
-        else:
-          result_statement = encodeStatement(str(self) + ';' + "FAIL")
 
-        OrderShuttle[1][requestID].append(result_statement)
-        if(isTail != True):
-          send(('slice', args, client_id, requestID, OrderShuttle), to = self.successor)
+          #Injecting the change result failure
+
+          if(fail_flag == True and self.curr_fail_op == "change_result"):
+            logger.info(str(self) + " Injecting the change_result failure")
+            output("injecting change_result Failure")
+            result_statement = encodeStatement(str(self) + ";" + "OK")
+            self.curr_fail_op = ""
+          OrderShuttle[1][requestID].append(result_statement)
+          #injecting the drop result statement failure
+
+          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
+            logger.info(str(self) + " Injecting the drop_result_statement failure")
+            output("injecting drop_result_statement Failure")
+            OrderShuttle[1][requestID].pop(0)
+            self.curr_fail_op = ""
+          if(isTail != True):
+            logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
+            send(('slice', args, client_id, requestID, OrderShuttle), to = self.successor)
+          else:
+            logger.info(str(self) + " sending result shuttle to " + str(client_id))
+            send(('slice_result', OrderShuttle[1], requestID), to = client_id)
+            logger.info(str(self) + " sending result shuttle back to " + str(self.predecessor))
+            send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
         else:
-          send(('slice_result', OrderShuttle[1], requestID), to = client_id)
-          send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
-      else:
-        output("Dropping invalid request")
+          logger.info(str(self) + " There orderProof is not correct. Becoming IMMUTABLE and sending reconfiguration request to olympus")
+          output("Dropping invalid request")
 
   def receive(msg=('append', args, client_id, requestID), from_=p_id):
+    cmd = 'slice(' +str(args)+')'
+    logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == "ACTIVE"):
+      fail_flag = check_if_failure(str(client_id), "client_request")
       if(checkIfRidPresentInHistory(requestID) == False):
         if(self.isHead):
           slot = get_slot_number()
@@ -312,7 +629,17 @@ class Replica(process):
           if(os != 'error'):
             self.History[requestID] = os
           orderProof = {}
-          enc_os = encodeStatement(os)
+          logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
+          if(fail_flag == True and self.curr_fail_op == "change_operation"):
+            #injecting Change_operation Failure
+            logger.info(str(self) + " Injecting the change_operation failure")
+            output("injecting Change_operation Failure")
+            os = getCorruptStatement(slot, 'get', ['x'])
+            enc_os = encodeStatement(os)
+            self.curr_fail_op = ""
+          else:
+            enc_os = encodeStatement(os)
+
           orderProof[requestID] = [enc_os]
           result_statement = ""
           if(args[0] in self.db):
@@ -322,55 +649,106 @@ class Replica(process):
             result_statement = encodeStatement(str(self) + ';' + "OK")
           else:
             result_statement = encodeStatement(str(self) + ';' + "FAIL")
+
+          #Injecting the change result failure
+
+          if(fail_flag == True and self.curr_fail_op == "change_result"):
+            logger.info(str(self) + " Injecting the change_result failure")
+            output("injecting change_result Failure")
+            result_statement = encodeStatement(str(self) + ";" + "OK")
+            self.curr_fail_op = ""
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
+          #injecting the drop result statement failure
+
+          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
+            logger.info(str(self) + " Injecting the drop_result_statement failure")
+            output("injecting drop_result_statement Failure")
+            OrderShuttle[1][requestID].pop(0)
+            self.curr_fail_op = ""
+          logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
           send(('append', args, client_id, requestID, OrderShuttle), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
           x = 1
 
       else:
-        output("operation already present in history")
-        if(requestID in self.resultCache) :
-          send(('get_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
-
-        else:
+        logger.info(str(self)+" result is not in cache")
+        self.retran_flag = 0
+        self.ReTransmittedRequest.append(requestID)
+        logger.info(str(self)+" waiting for the result shuttle to come back")
+        if await(self.retran_flag == 1):
+          logger.info(str(self) + " the result shuttle for broadcasted operation  received. sending it to client :" + str(client_id))
+          send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
           self.retran_flag = 0
-          self.ReTransmittedRequest.append(requestID)
-          if await(self.retran_flag == 1):
-            self.retran_flag = 0
-          elif timeout(conf['head_timeout']/1000):
-            output("Retransmission timeout. Needs reconfiguration")
+        elif timeout(conf['head_timeout']/1000):
+          logger.info(str(self) + " timed out. Becomes immutable and sends the reconfiguration request to olympus")
+          output("Retransmission timeout. Needs reconfiguration")
 
     else:
       output("Replica is immutable")
 
   def receive(msg=('append', args, client_id, requestID, OrderShuttle), from_=p_id):
-    if(isHead != True):
-      if(verifyOrderProof(OrderShuttle[0], requestID) == True):
-        slot = get_slot_number()
-        os = orderCommand(slot, 'append', args)
-        if(os != 'error'):
-          self.History[requestID] = os
-        enc_os = encodeStatement(os)
-        OrderShuttle[0][requestID].append(enc_os)
-        result_statement = ""
-        if(args[0] in self.db):
-          val = self.db[args[0]]
-          val = val + " " + args[1]
-          self.db[args[0]] = val
-          result_statement = encodeStatement(str(self) + ';' + "OK")
+    cmd = 'slice(' +str(args)+')'
+    logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
+    if(self.state == 'ACTIVE'):
+      if(isHead != True):
+        fail_flag = check_if_failure(str(client_id), "forwarded_request")
+        if(fail_flag == False):
+          fail_flag = check_if_failure(str(client_id), "shuttle")
+        if(verifyOrderProof(OrderShuttle[0], requestID) == True):
+          slot = get_slot_number()
+          os = orderCommand(slot, 'append', args)
+          if(os != 'error'):
+            self.History[requestID] = os
+          logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
+          if(fail_flag == True and self.curr_fail_op == "change_operation"):
+            #injecting Change_operation Failure
+            logger.info(str(self) + " Injecting the change_operation failure")
+            output("injecting Change_operation Failure")
+            os = getCorruptStatement(slot, 'get', ['x'])
+            enc_os = encodeStatement(os)
+            self.curr_fail_op = ""
+          else:
+            enc_os = encodeStatement(os)
+
+          OrderShuttle[0][requestID].append(enc_os)
+          result_statement = ""
+          if(args[0] in self.db):
+            val = self.db[args[0]]
+            val = val + " " + args[1]
+            self.db[args[0]] = val
+            result_statement = encodeStatement(str(self) + ';' + "OK")
+          else:
+            result_statement = encodeStatement(str(self) + ';' + "FAIL")
+
+          #Injecting the change result failure
+
+          if(fail_flag == True and self.curr_fail_op == "change_result"):
+            logger.info(str(self) + " Injecting the change_result failure")
+            output("injecting change_result Failure")
+            result_statement = encodeStatement(str(self) + ";" + "OK")
+            self.curr_fail_op = ""
+          OrderShuttle[1][requestID].append(result_statement)
+          #injecting the drop result statement failure
+
+          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
+            logger.info(str(self) + " Injecting the drop_result_statement failure")
+            output("injecting drop_result_statement Failure")
+            OrderShuttle[1][requestID].pop(0)
+            self.curr_fail_op = ""
+          if(isTail != True):
+            logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
+            send(('append', args, client_id, requestID, OrderShuttle), to = self.successor)
+          else:
+            logger.info(str(self) + " sending result shuttle to " + str(client_id))
+            send(('append_result', OrderShuttle[1], requestID), to = client_id)
+            logger.info(str(self) + " sending result shuttle back to " + str(self.predecessor))
+            send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
         else:
-          result_statement = encodeStatement(str(self) + ';' + "FAIL")
-        OrderShuttle[1][requestID].append(result_statement)
-        if(isTail != True):
-          send(('append', args, client_id, requestID, OrderShuttle), to = self.successor)
-        else:
-          send(('append_result', OrderShuttle[1], requestID), to = client_id)
-          send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
-      else:
-        output("Dropping invalid request")
+          logger.info(str(self) + " There orderProof is not correct. Becoming IMMUTABLE and sending reconfiguration request to olympus")
+          output("Dropping invalid request")
 
   def receive(msg = ('get_dict'), from_ = client_id):
     send(('dict_reply', self.db), to = client_id)
@@ -386,7 +764,6 @@ class Replica(process):
       except:
         cond = False
         break
-
     if(cond == True):
       if(requestID in self.ReTransmittedRequest):
         output("Sending back the response of retransmitted request to : CLIENT")
@@ -395,11 +772,18 @@ class Replica(process):
           send(('result_back', result_shuttle, requestID), to = self.predecessor)
         self.retran_flag = 1
       else:
+        #injecting the drop result statement failure
+        #fail_flag = check_if_failure(str(clientID), "drop_result_statement")
+        #if((fail_flag == True) and (self.curr_fail_op == "drop_result_statement")):
+        #  output("injecting drop_result_statement Failure")
+        #  result_shuttle[requestID].pop(0)
+        #  self.curr_fail_op = ""
+
         self.resultCache[requestID] = result_shuttle[requestID]
         if(isHead == False):
           send(('result_back', result_shuttle, requestID), to = self.predecessor)
     else:
-      output("Needs reconfiguration as the result shuttle is inconsistent")
+      output("Needs reconfiguration as the result shuttle is inconsistent. The replica will become immutable.")
     #for key in self.resultCache :
     #  output(key, self.resultCache[key])
 

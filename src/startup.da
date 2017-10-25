@@ -1,7 +1,18 @@
 import time
 import sys
+import logging
+
 olympus = import_da('Olympus')
 client = import_da('Client')
+
+def get_logger(name, filename):
+  formatter = logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+  hld = logging.FileHandler(filename, mode='w')
+  hld.setFormatter(formatter)
+  logger = logging.getLogger(name)
+  logger.setLevel(logging.DEBUG)
+  logger.addHandler(hld)
+  return logger
 
 def getWorkload(conf):
   workload = {}
@@ -35,11 +46,12 @@ def getFailureCases(conf):
   return failureCases
 
 def main():
+  #logger = get_logger('startup', 'startup.txt')
   conf = {}
   workload = {}
   failureCases = {}
   cni = {}
-  with open('config.txt', 'r') as f:
+  with open(sys.argv[1], 'r') as f:
     for line in f:
       if line[0] != '#':
         (key, sep, val) = line.partition('=')
@@ -53,7 +65,7 @@ def main():
   cli = new(client.Client, num=conf['num_client'])
   i = 0
   for c in cli:
-    cni[i] = cli
+    cni[i] = c
     i = i+1
   output("Creating Olympus")
   #oly = new(olympus.Olympus, num=1, at=conf['olympus_node'])

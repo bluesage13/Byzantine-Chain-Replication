@@ -1,3 +1,6 @@
+import time
+import sys
+import logging
 import nacl.encoding
 import nacl.signing
 replica = import_da('Replica')
@@ -11,47 +14,71 @@ class Olympus(process):
     self.pubkey = ""
     self.client_num_id = cni
     self.failureCases = fc
+    self.logger = None
+
+  def get_logger(name, filename):
+    formatter = logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    hld = logging.FileHandler(filename, mode='a')
+    hld.setFormatter(formatter)
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(hld)
+    return logger
 
   def run():
-    output(self.client_num_id)
+    self.logger = get_logger('olympus', conf['test_case_name']+'_o.txt')
+    logger.info(self.client_num_id)
     self.prikey = nacl.signing.SigningKey.generate()
     self.pubkey = self.prikey.verify_key
+    logger.info("Created public and private keys for self")
     create_replicas()
     while(True):
       await(False)
 
   def receive(msg = ('get_public_key_maps'), from_ = p_id):
+    logger.info("received get_public_key_maps message from: "+ str(p_id))
+    logger.info("sending public key maps to :" + str(p_id))
     send(('public_key_maps', self.clientKeyMap, self.replicaKeyMap), to = p_id)
 
   def receive(msg = ('getConfig', p), from_ = client_id):
+    logger.info("received getConfig message from :" + str(client_id))
     output("Sending current config to : ", client_id)
+    logger.info("Sending current config to: " + str(client_id))
     send(('currentConfig', self.replicas), to = client_id)
 
   def receive(msg = ('generate_keys'), from_=client_id):
+    logger.info("received generate_keys message from: "+str(client_id))
     pri_key = nacl.signing.SigningKey.generate()
     pub_key = pri_key.verify_key
     self.clientKeyMap[client_id] = pub_key
+    logger.info("generating and sending private key to : " + str(client_id))
     send(('generated_key', pri_key), to = client_id)
 
   def receive(msg = ('get_chain_info'), from_ = replica_id):
+    logger.info("received get_chain_info message from : "+str(replica_id))
     rep = list(self.replicas)
     headReplica = rep[0]
     for i in range(0, len(rep)):
       if(rep[i] == replica_id):
         break
     if (i == 0):
+      logger.info("sending back chain info to " + str(replica_id))
       send(('val_chain_info', None, rep[i+1], headReplica), to = replica_id)
     elif (i == (len(rep) - 1)):
+      logger.info("sending back chain info to " + str(replica_id))
       send(('val_chain_info', rep[i - 1], None, headReplica), to = replica_id)
     else:
+      logger.info("sending back chain info to " + str(replica_id))
       send(('val_chain_info', rep[i - 1], rep[i+1], headReplica), to = replica_id)
 
   def create_replicas():
     num_replicas = 2 * conf['t'] + 1
+    logger.info("Creating replicas. Number = " + str(num_replicas))
     self.replicas = new(replica.Replica, num = num_replicas)
     output(self.replicas)
     cnt = 0
     for r in self.replicas:
+      logger.info("setting up keys and starting replica: "+str(r))
       pri_key = nacl.signing.SigningKey.generate()
       pub_key = pri_key.verify_key
       self.replicaKeyMap[r] = pub_key
