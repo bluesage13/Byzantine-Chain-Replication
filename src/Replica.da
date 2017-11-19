@@ -2,6 +2,7 @@ import time
 import collections
 import sys
 import logging
+import nacl.hash
 
 class Replica(process):
   def get_logger(name, filename):
@@ -36,9 +37,20 @@ class Replica(process):
     self.fail_flag = False
     self.curr_fail_op = ""
     self.logger = None
+    #for checkpointing
+    self.cp_interval = -1
+    self.cccslot = 0
+    self.chcslot = 0
+    self.h_cp_proof = []
+    self.c_cp_proof = []
+    self.hasher = nacl.hash.sha256
+    self.mod_cp_hash = ""
+
 
   def run():
-    self.logger = get_logger('replica', conf['test_case_name']+'_r.txt')
+    logger_file_name = conf['test_case_name'] + str(self).split(':')[1] + '_r.txt'
+    self.cp_interval = int(conf['checkpt_interval'])
+    self.logger = get_logger('replica', logger_file_name)
     logger.info(str(self) + " Getting chain info from olympus")
     send(('get_chain_info'), to = olympus)
     await(self.flag == 1)
@@ -218,6 +230,17 @@ class Replica(process):
     enc_s = self.privateKey.sign(bytes(statement,'utf-8'))
     return enc_s
 
+  def validate_checkpoint_proof():
+    return True
+
+  def get_hash():
+    st = ""
+    for key, val in self.db.items():
+      st = st + key + ':' + val + ';'
+    bst = bytes(st,'utf-8')
+    r_st_hash = self.hasher(bst, encoder=nacl.encoding.HexEncoder)
+    return r_st_hash
+
   def receive(msg = ('put', k_v, client_id, requestID), from_=p_id):
     cmd = 'put('+k_v[0]+','+(k_v[1])+')'
     logger.info(str(self) + " Received " + cmd + "from" + str(p_id))
@@ -263,6 +286,11 @@ class Replica(process):
             OrderShuttle[1][requestID].pop(0)
             self.curr_fail_op = ""
           send(('put', k_v, client_id, requestID, OrderShuttle), to = self.successor)
+          if((self.current_slot - 1) % self.cp_interval == 0):
+              checkpoint_proof = {}
+              checkpoint_proof[self.current_slot - 1] = get_hash()
+
+              send(('checkpoint', self.current_slot - 1, checkpoint_proof), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
           output("replica says retransmissoin")
@@ -332,14 +360,34 @@ class Replica(process):
             output("injecting drop_result_statement Failure")
             OrderShuttle[1][requestID].pop(0)
             self.curr_fail_op = ""
+
+          #get mod_cp_hash if (curr.slot - 1)%10 == 0
+          if((self.current_slot - 1) % 10 == 0):
+            self.mod_cp_hash = get_hash()
+
           if(isTail != True):
             logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
             send(('put', k_v, client_id, requestID, OrderShuttle), to = self.successor)
+            if(self.chcslot > self.current_slot - 1):
+              self.h_cp_proof[self.chcslot] = self.mod_cp_hash
+              send(('checkpoint', self.current_slot - 1, checkpoint_proof), to = self.successor)
+              self.chcslot = -1
+
+
           else:
             logger.info(str(self) + " sending the result shuttle to client: " + str(client_id))
             send(('put_result', OrderShuttle[1], requestID), to = client_id)
             logger.info(str(self) + " send the result shuttle back in the chain to: " + str(self.predecessor))
             send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
+
+            if(self.chcslot > self.current_slot - 1):
+              self.h_cp_proof[self.chcslot] = self.mod_cp_hash
+            #the cp is complete so now check
+            if(validate_checkpoint_proof()):
+              send(('completed_cp', self.h_cp_proof, self.chcslot), to = self.predecessor)
+              self.chcslot = -1
+            else:
+              print("proof of misbehaviour send olympus a reconfig request")
         else:
           logger.info(str(self) + " There orderProof is not correct. Becoming IMMUTABLE and sending reconfiguration request to olympus")
           output("Dropping invalid request")
@@ -395,6 +443,11 @@ class Replica(process):
             self.curr_fail_op = ""
           logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
           send(('get', key, client_id, requestID, OrderShuttle), to = self.successor)
+          if((self.current_slot - 1) % self.cp_interval == 0):
+              checkpoint_proof = {}
+              checkpoint_proof[self.current_slot - 1] = get_hash()
+
+              send(('checkpoint', self.current_slot - 1, checkpoint_proof), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
           x = 1
@@ -531,6 +584,11 @@ class Replica(process):
             self.curr_fail_op = ""
           logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
           send(('slice', args, client_id, requestID, OrderShuttle), to = self.successor)
+          if((self.current_slot - 1) % self.cp_interval == 0):
+              checkpoint_proof = {}
+              checkpoint_proof[self.current_slot - 1] = get_hash()
+
+              send(('checkpoint', self.current_slot - 1, checkpoint_proof), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
           x = 1
@@ -618,7 +676,7 @@ class Replica(process):
           output("Dropping invalid request")
 
   def receive(msg=('append', args, client_id, requestID), from_=p_id):
-    cmd = 'slice(' +str(args)+')'
+    cmd = 'append(' +str(args)+')'
     logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == "ACTIVE"):
       fail_flag = check_if_failure(str(client_id), "client_request")
@@ -669,6 +727,11 @@ class Replica(process):
             self.curr_fail_op = ""
           logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
           send(('append', args, client_id, requestID, OrderShuttle), to = self.successor)
+          if((self.current_slot - 1) % self.cp_interval == 0):
+              checkpoint_proof = {}
+              checkpoint_proof[self.current_slot - 1] = get_hash()
+
+              send(('checkpoint', self.current_slot - 1, checkpoint_proof), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
           x = 1
@@ -690,7 +753,7 @@ class Replica(process):
       output("Replica is immutable")
 
   def receive(msg=('append', args, client_id, requestID, OrderShuttle), from_=p_id):
-    cmd = 'slice(' +str(args)+')'
+    cmd = 'append(' +str(args)+')'
     logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == 'ACTIVE'):
       if(isHead != True):
@@ -752,6 +815,10 @@ class Replica(process):
 
   def receive(msg = ('get_dict'), from_ = client_id):
     send(('dict_reply', self.db), to = client_id)
+
+  def receive(msg = ('checkpoint', cp_sn, checkpoint_proof), from_ = p_id):
+    self.chcslot = cp_sn
+    self.h_cp_proof = checkpoint_proof
 
   def receive(msg = ('result_back', result_shuttle, requestID, clientID), from_ = p_id):
     cond = True

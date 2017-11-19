@@ -25,7 +25,8 @@ class Client(process):
     self.logger = None
 
   def run():
-    self.logger = get_logger('client', conf['test_case_name']+'_c.txt')
+    logger_file_name = conf['test_case_name'] + str(self).split(':')[1] + '_c.txt'
+    self.logger = get_logger('client', logger_file_name)
     logger.info(str(self) + " sending get config request to olympus")
     send(('getConfig', self), to = oly)
     await(len(self.replicas) != 0)
