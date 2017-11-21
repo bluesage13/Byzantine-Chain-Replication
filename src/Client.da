@@ -15,7 +15,7 @@ class Client(process):
     logger.addHandler(hld)
     return logger
 
-  def setup(conf, oly, workload):
+  def setup(conf, oly, workload, cc):
     self.replicas = {}
     self.flag = 0
     self.RTRequest = []
@@ -23,6 +23,9 @@ class Client(process):
     self.replicaKM = {}
     self.clientKM = {}
     self.logger = None
+    self.curr_config = cc
+    self.reconfig = False
+    self.reconfig_at = None
 
   def run():
     logger_file_name = conf['test_case_name'] + str(self).split(':')[1] + '_c.txt'
@@ -61,7 +64,7 @@ class Client(process):
         i = 0
         j = 0
         while(j < 2):
-          if await(flag == 1):
+          if await((flag == 1) or (self.reconfig == True)):
             self.flag = 0
             break
           elif timeout(conf['client_timeout']/1000):
@@ -82,7 +85,7 @@ class Client(process):
         i = 0
         j = 0
         while(j < 2):
-          if await(flag == 1):
+          if await((flag == 1) or (self.reconfig == True)):
             self.flag = 0
             break
           elif timeout(conf['client_timeout']/1000):
@@ -102,7 +105,7 @@ class Client(process):
         i = 0
         j = 0
         while(j < 2):
-          if await(flag == 1):
+          if await((flag == 1) or (self.reconfig == True)):
             self.flag = 0
             break
           elif timeout(conf['client_timeout']/1000):
@@ -122,7 +125,7 @@ class Client(process):
         i = 0
         j = 0
         while(j < 2):
-          if await(flag == 1):
+          if await((flag == 1) or (self.reconfig == True)):
             self.flag = 0
             break
           elif timeout(conf['client_timeout']/1000):
@@ -134,6 +137,14 @@ class Client(process):
             j = j+2
           i = i + 1
 
+      #for testing purpose
+      elif(op_b == 'rec'):
+        send(('reconfig'), to = head)
+        if await((flag == 1) or (self.reconfig == True)):
+          self.flag = 0
+
+      if(self.reconfig == True):
+        output("Reconfiguration is underway. Ask olympus for reconfig request")
       opNum = opNum + 1
 
 
@@ -261,6 +272,11 @@ class Client(process):
   def receive(msg = ('generated_key', pri_key), from_ = oly):
     self.private_key = pri_key
     self.flag = 1
+
+  def receive(msg = ('immutable', req_id), from_ = rid):
+    self.reconfig = True
+    self.reconfig_at = req_id
+    logger.info(str(self) + " Received immutable message from replica. Reconfig is underway.")
 
   def getArguments(key_val):
     args_t = key_val.split(',')

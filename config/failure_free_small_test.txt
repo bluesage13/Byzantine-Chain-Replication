@@ -1,8 +1,9 @@
 test_case_name = failure_free_small_test
 t = 1
-num_client = 1
+num_client = 2
 client_timeout = 3000
 head_timeout = 3000
 nonhead_timeout = 3000
 checkpt_interval = 2
-workload[0] = put('movie', 'star');put('movie', 'star');put('movie', 'star');put('movie', 'star');put('movie', 'star')
+workload[0] = put('movie', 'star');put('movie', 'star');put('movie', 'star');put('movie', 'star');reconfig
+workload[1] = get('movie');get('movie');get('movie');get('movie');get('movie');

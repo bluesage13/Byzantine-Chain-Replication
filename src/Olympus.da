@@ -6,7 +6,7 @@ import nacl.signing
 replica = import_da('Replica')
 
 class Olympus(process):
-  def setup(conf, cni, fc):
+  def setup(conf, cni, fc, cc):
     self.replicas = {}
     self.clientKeyMap = {}
     self.replicaKeyMap = {}
@@ -15,6 +15,9 @@ class Olympus(process):
     self.client_num_id = cni
     self.failureCases = fc
     self.logger = None
+    self.curr_config = cc
+    self.reconfig_flag = 0
+    self.wedged_replies = {}
 
   def get_logger(name, filename):
     formatter = logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
@@ -33,7 +36,99 @@ class Olympus(process):
     logger.info("Created public and private keys for self")
     create_replicas()
     while(True):
-      await(False)
+      await(self.reconfig_flag == 1)
+      await(len(self.wedged_replies) == len(self.replicas))
+
+
+      #validate every history for no holes
+      logger.info(str(self) + " Reconfiguration underway")
+      logger.info(str(self) + " Validating Individual histories")
+      for r in self.wedged_replies:
+        h = self.wedged_replies[r][0]
+        logger.info(str(self) + " History for : " + str(r) + " is : %s", h)
+        prev = -1
+        #if the history is valid maybe add the replica id to a list of quorum
+        for req in h:
+          if(prev == -1):
+            prev = int(h[req].split(';')[1])
+          else:
+            if prev+1 == int(h[req].split(';')[1]):
+              prev = int(h[req].split(';')[1])
+            else:
+              output("This replica doesn't have correct history")
+      logger.info(str(self) + " Getting highest checkpoint")
+
+      #get highest checkpoint
+      max_cp = -1
+      for r in self.wedged_replies:
+        cp = self.wedged_replies[r][1]
+        cp_slot = list(cp)[0]
+        if(max_cp < cp_slot):
+          max_cp = cp_slot
+        logger.info(str(self) + " Last Checkpoint for : " + str(r) + " is : " + str(cp_slot))
+      logger.info(str(self) + " Highest Checkpoint : " + str(cp_slot))
+
+      #get highest slot number seen by a replica
+      logger.info(str(self) + " Getting highest slot seen by replica")
+      h_slot = -1
+      h_s_rep = None
+      for r in self.wedged_replies:
+        h = self.wedged_replies[r][0]
+        len_h = len(list(h))
+        if(len_h != 0):
+          last_os = h[list(h)[len_h - 1]]
+          lslot = int(last_os.split(';')[1])
+          if(h_slot < lslot):
+            h_slot = lslot
+            h_s_rep = r
+          logger.info(str(self) + " Last os for " + str(r) + "is : " + last_os)
+          logger.info(str(self) + " Last Slot seen by " + str(r) + "is : " + str(lslot))
+
+        else:
+          logger.info(str(self) + " " + str(r) + "has completely truncated history")
+      inv_catchup = False
+      if((h_slot + 1) != max_cp):
+        logger.info(str(self) + " The highest slot seen by a replica is " + str(h_slot) + " seen by : " + str(h_s_rep))
+        inv_catchup = True
+      else:
+        logger.info(str(self) + " Catching up need not be done ")
+        inv_catchup = False
+
+      if(inv_catchup == True):
+        for r in self.wedged_replies:
+          if r != h_s_rep:
+            #calculate the difference
+            longest_h = self.wedged_replies[h_s_rep][0]
+            cmp_h = self.wedged_replies[r][0]
+            cmp_s = list(self.wedged_replies[r][1])[0]
+            catch_up_hist = {}
+            h_f = 0
+            s_h = 0
+            t_h = 0
+            if(len(cmp_h) == 0):
+              if cmp_s == max_cp:
+                t_h == 1
+                output("Has max checkpoint and completely truncated history")
+            for rid in longest_h:
+              if s_h == 0:
+                if (int(longest_h[rid].split(';')[1]) + 1) < cmp_s:
+                  output("skipping history " + longest_h[rid])
+                  continue
+                else:
+                  s_h = 1
+              if h_f == 0 and rid in cmp_h:
+                output("both have " + longest_h[rid])
+                continue
+              else:
+                h_f = 1
+              if h_f == 1:
+                catch_up_hist[rid] = longest_h[rid]
+            logger.info(str(self) + " Catchup instructions for " + str(r) + " are: %s", catch_up_hist)
+
+
+      logger.info(str(self) + " Highest slot " + str(h_slot) + "seen by replica : " + str(h_s_rep))
+      break
+
 
   def receive(msg = ('get_public_key_maps'), from_ = p_id):
     logger.info("received get_public_key_maps message from: "+ str(p_id))
@@ -71,6 +166,20 @@ class Olympus(process):
       logger.info("sending back chain info to " + str(replica_id))
       send(('val_chain_info', rep[i - 1], rep[i+1], headReplica), to = replica_id)
 
+  def receive(msg = ('wedged_reply', rid, hist, cp), from_=p_id):
+    logger.info(str(self) + " received wedged reply from " + str(p_id))
+    self.wedged_replies[rid] = [hist, cp]
+
+  def receive(msg = ('reconfiguration', cc), from_=p_id):
+    if(self.curr_config == cc and self.reconfig_flag == 0):
+      for r in self.replicas:
+        send(('wedge_request'), to = r)
+      self.reconfig_flag = 1
+      logger.info(str(self) + " Received reconfiguration request from " + str(p_id))
+
+    else:
+      output("Reconfiguration underway for the received config value. Ignoring request")
+
   def create_replicas():
     num_replicas = 2 * conf['t'] + 1
     logger.info("Creating replicas. Number = " + str(num_replicas))
@@ -84,21 +193,21 @@ class Olympus(process):
       self.replicaKeyMap[r] = pub_key
       if(cnt == 0):
         if(cnt in self.failureCases):
-          setup(r, (conf, True, False, pri_key, cni, failureCases[cnt], self))
+          setup(r, (conf, True, False, pri_key, cni, failureCases[cnt], self.curr_config, self))
         else:
-          setup(r, (conf, True, False, pri_key, cni, None, self))
+          setup(r, (conf, True, False, pri_key, cni, None, self.curr_config, self))
 
       elif(cnt == (len(self.replicas) - 1)):
         if(cnt in self.failureCases):
-          setup(r, (conf, False, True, pri_key, cni, failureCases[cnt], self))
+          setup(r, (conf, False, True, pri_key, cni, failureCases[cnt], self.curr_config, self))
         else:
-          setup(r, (conf, False, True, pri_key, cni, None, self))
+          setup(r, (conf, False, True, pri_key, cni, None, self.curr_config, self))
 
       else:
         if(cnt in self.failureCases):
-          setup(r, (conf, False, False, pri_key, cni, failureCases[cnt], self))
+          setup(r, (conf, False, False, pri_key, cni, failureCases[cnt], self.curr_config, self))
         else:
-          setup(r, (conf, False, False, pri_key, cni, None, self))
+          setup(r, (conf, False, False, pri_key, cni, None, self.curr_config, self))
 
       start(r)
       cnt = cnt + 1

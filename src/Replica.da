@@ -14,7 +14,7 @@ class Replica(process):
     logger.addHandler(hld)
     return logger
 
-  def setup(conf, head, tail, pri_key, cni, failures, olympus):
+  def setup(conf, head, tail, pri_key, cni, failures, cc,olympus):
     self.db = {}
     self.state = "ACTIVE"
     self.isHead = head
@@ -46,6 +46,7 @@ class Replica(process):
     self.hasher = nacl.hash.sha256
     self.mod_cp_hash = ""
     self.send_cp = 0
+    self.curr_config = cc
 
 
   def run():
@@ -259,39 +260,41 @@ class Replica(process):
     output(self.History)
 
   def receive(msg = ('completed_cp', cp_slot, checkpoint_proof), from_=p_id):
-    output("received completed checkpoint proof should validate and truncate history")
-    output(checkpoint_proof)
-    truncate_history(cp_slot)
-    if(isHead != True):
-      send(('completed_cp', cp_slot, checkpoint_proof), to = self.predecessor)
-    self.cccslot = cp_slot
-    self.c_cp_proof = checkpoint_proof
+    if self.state == "ACTIVE" :
+      output("received completed checkpoint proof should validate and truncate history")
+      output(checkpoint_proof)
+      truncate_history(cp_slot)
+      if(isHead != True):
+        send(('completed_cp', cp_slot, checkpoint_proof), to = self.predecessor)
+      self.cccslot = cp_slot
+      self.c_cp_proof = checkpoint_proof
 
   def receive(msg = ('checkpoint', cp_slot, checkpoint_proof), from_=p_id):
-    if(self.current_slot >= cp_slot):
-      checkpoint_proof[cp_slot].append(self.mod_cp_hash)
-      if(isTail != True):
-        output("received checkpoint, appended self hash")
-        output(checkpoint_proof)
-        logger.info(str(self) + "sending checkpoint proof forward to " + str(self.successor))
-        send(('checkpoint', cp_slot, checkpoint_proof), to = self.successor)
-      else:
-        output("In tail added self hash now checking validity")
-        output(checkpoint_proof)
-        if(validate_checkpoint_proof(checkpoint_proof, cp_slot)):
-          output("Checkpoint proof complete. Sending cp back in the chain")
-          logger.info(str(self) + "sending checkpoint proof back in the chain " + str(self.predecessor))
-          truncate_history(cp_slot)
-          send(('completed_cp', cp_slot, checkpoint_proof), to = self.predecessor)
-          self.cccslot = cp_slot
-          self.c_cp_proof = checkpoint_proof
+    if self.state == "ACTIVE" :
+      if(self.current_slot >= cp_slot):
+        checkpoint_proof[cp_slot].append(self.mod_cp_hash)
+        if(isTail != True):
+          output("received checkpoint, appended self hash")
+          output(checkpoint_proof)
+          logger.info(str(self) + "sending checkpoint proof forward to " + str(self.successor))
+          send(('checkpoint', cp_slot, checkpoint_proof), to = self.successor)
         else:
-          output("Found error in the checkpoint proof, call for reconfiguration")
-          output("Actually the result shuttle will anyway cause reconfig request in this case")
-    else:
-      output("Saving the checkpoint until slot reaches required value")
-      self.chcslot = cp_slot
-      self.h_cp_proof = checkpoint_proof
+          output("In tail added self hash now checking validity")
+          output(checkpoint_proof)
+          if(validate_checkpoint_proof(checkpoint_proof, cp_slot)):
+            output("Checkpoint proof complete. Sending cp back in the chain")
+            logger.info(str(self) + "sending checkpoint proof back in the chain " + str(self.predecessor))
+            truncate_history(cp_slot)
+            send(('completed_cp', cp_slot, checkpoint_proof), to = self.predecessor)
+            self.cccslot = cp_slot
+            self.c_cp_proof = checkpoint_proof
+          else:
+            output("Found error in the checkpoint proof, call for reconfiguration")
+            output("Actually the result shuttle will anyway cause reconfig request in this case")
+      else:
+        output("Saving the checkpoint until slot reaches required value")
+        self.chcslot = cp_slot
+        self.h_cp_proof = checkpoint_proof
 
   def receive(msg = ('put', k_v, client_id, requestID), from_=p_id):
     cmd = 'put('+k_v[0]+','+(k_v[1])+')'
@@ -346,12 +349,29 @@ class Replica(process):
               send(('checkpoint', self.current_slot, checkpoint_proof), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
-          output("replica says retransmissoin")
+          output("replica says retransmission")
+          logger.info(str(self) + " received the broadcast from client.")
+          if(requestID in self.resultCache) :
+            logger.info(str(self) + " the result shuttle for broadcasted operation present in result cache. sending it to client :" + str(client_id))
+            send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+          else:
+            logger.info(str(self)+" result is not in cache")
+            self.retran_flag = 0
+            self.ReTransmittedRequest.append(requestID)
+            logger.info(str(self)+" Sending the operation to head and waiting for the result shuttle to come back")
+            send(('put', k_v, client_id, requestID), to = self.headReplica)
+            if await(self.retran_flag == 1):
+              logger.info(str(self) + " the result shuttle for broadcasted operation  received. sending it to client :" + str(client_id))
+              send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+              self.retran_flag = 0
+            elif timeout(conf['head_timeout']/1000):
+              logger.info(str(self) + " timed out. Sending reconfiguration request to olympus")
+              send(('reconfiguration', self.curr_config), to = olympus)
 
       else:
         logger.info(str(self) + " received the broadcast from client.")
         if(requestID in self.resultCache) :
-          logger.info(str(self) + " the result shuttle for broadcasted operation present in history. sending it to client :" + str(client_id))
+          logger.info(str(self) + " the result shuttle for broadcasted operation present in result cache. sending it to client :" + str(client_id))
           send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
 
         else:
@@ -364,11 +384,12 @@ class Replica(process):
             send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
             self.retran_flag = 0
           elif timeout(conf['head_timeout']/1000):
-            logger.info(str(self) + " timed out. Becomes immutable and sends the reconfiguration request to olympus")
-            output("Retransmission timeout. Needs reconfiguration")
+            logger.info(str(self) + " timed out. Sending reconfiguration request to olympus")
+            send(('reconfiguration', self.curr_config), to = olympus)
 
     else:
       output("Replica is immutable")
+      send(('immutable',requestID), to = client_id)
 
   def receive(msg = ('put', k_v, client_id, requestID, OrderShuttle), from_=p_id):
     cmd = 'put(' +k_v[0]+','+k_v[1]+')'
@@ -457,6 +478,7 @@ class Replica(process):
         else:
           logger.info(str(self) + " There orderProof is not correct. Becoming IMMUTABLE and sending reconfiguration request to olympus")
           output("Dropping invalid request")
+          send(('reconfiguration', self.curr_config), to = olympus)
 
   def receive(msg=('get', key, client_id, requestID), from_=p_id):
     cmd = 'get(' +key+')'
@@ -517,7 +539,24 @@ class Replica(process):
               send(('checkpoint', self.current_slot, checkpoint_proof), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
-          x = 1
+          logger.info(str(self) + " received the broadcast from client.")
+          if(requestID in self.resultCache) :
+            logger.info(str(self) + " the result shuttle for broadcasted operation present in result cache. sending it to client :" + str(client_id))
+            send(('get_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+          else:
+            logger.info(str(self)+" result is not in cache")
+            self.retran_flag = 0
+            self.ReTransmittedRequest.append(requestID)
+            logger.info(str(self)+" Sending the operation to head and waiting for the result shuttle to come back")
+            send(('get', key, client_id, requestID), to = self.headReplica)
+            if await(self.retran_flag == 1):
+              logger.info(str(self) + " the result shuttle for broadcasted operation  received. sending it to client :" + str(client_id))
+              send(('get_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+              self.retran_flag = 0
+            elif timeout(conf['head_timeout']/1000):
+              logger.info(str(self) + " timed out. Sending reconfiguration request to olympus")
+              send(('reconfiguration', self.curr_config), to = olympus)
+
 
       else:
         logger.info(str(self)+" result is not in cache")
@@ -526,13 +565,14 @@ class Replica(process):
         logger.info(str(self)+" waiting for the result shuttle to come back")
         if await(self.retran_flag == 1):
           logger.info(str(self) + " the result shuttle for broadcasted operation  received. sending it to client :" + str(client_id))
-          send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+          send(('get_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
           self.retran_flag = 0
         elif timeout(conf['head_timeout']/1000):
           logger.info(str(self) + " timed out. Becomes immutable and sends the reconfiguration request to olympus")
-          output("Retransmission timeout. Needs reconfiguration")
+          send(('reconfiguration', self.curr_config), to = olympus)
     else:
       output("Replica is immutable")
+      send(('immutable',requestID), to = client_id)
 
   def receive(msg = ('get', key, client_id, requestID, OrderShuttle), from_=p_id):
     cmd = 'get(' +key+')'
@@ -624,6 +664,7 @@ class Replica(process):
         else:
           logger.info(str(self) + " There orderProof is not correct. Becoming IMMUTABLE and sending reconfiguration request to olympus")
           output("Dropping invalid request")
+          send(('reconfiguration', self.curr_config), to = olympus)
 
   def receive(msg=('slice', args, client_id, requestID), from_=p_id):
     cmd = 'slice(' +str(args)+')'
@@ -690,7 +731,23 @@ class Replica(process):
               send(('checkpoint', self.current_slot, checkpoint_proof), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
-          x = 1
+          logger.info(str(self) + " received the broadcast from client.")
+          if(requestID in self.resultCache) :
+            logger.info(str(self) + " the result shuttle for broadcasted operation present in result cache. sending it to client :" + str(client_id))
+            send(('slice_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+          else:
+            logger.info(str(self)+" result is not in cache")
+            self.retran_flag = 0
+            self.ReTransmittedRequest.append(requestID)
+            logger.info(str(self)+" Sending the operation to head and waiting for the result shuttle to come back")
+            send(('slice', args, client_id, requestID), to = self.headReplica)
+            if await(self.retran_flag == 1):
+              logger.info(str(self) + " the result shuttle for broadcasted operation  received. sending it to client :" + str(client_id))
+              send(('slice_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+              self.retran_flag = 0
+            elif timeout(conf['head_timeout']/1000):
+              logger.info(str(self) + " timed out. Sending reconfiguration request to olympus")
+              send(('reconfiguration', self.curr_config), to = olympus)
 
       else:
         logger.info(str(self)+" result is not in cache")
@@ -699,14 +756,15 @@ class Replica(process):
         logger.info(str(self)+" waiting for the result shuttle to come back")
         if await(self.retran_flag == 1):
           logger.info(str(self) + " the result shuttle for broadcasted operation  received. sending it to client :" + str(client_id))
-          send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+          send(('slice_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
           self.retran_flag = 0
         elif timeout(conf['head_timeout']/1000):
           logger.info(str(self) + " timed out. Becomes immutable and sends the reconfiguration request to olympus")
-          output("Retransmission timeout. Needs reconfiguration")
+          send(('reconfiguration', self.curr_config), to = olympus)
 
     else:
       output("Replica is immutable")
+      send(('immutable',requestID), to = client_id)
 
   def receive(msg=('slice', args, client_id, requestID, OrderShuttle), from_=p_id):
     cmd = 'slice(' +str(args)+')'
@@ -802,6 +860,7 @@ class Replica(process):
         else:
           logger.info(str(self) + " There orderProof is not correct. Becoming IMMUTABLE and sending reconfiguration request to olympus")
           output("Dropping invalid request")
+          send(('reconfiguration', self.curr_config), to = olympus)
 
   def receive(msg=('append', args, client_id, requestID), from_=p_id):
     cmd = 'append(' +str(args)+')'
@@ -863,7 +922,23 @@ class Replica(process):
               send(('checkpoint', self.current_slot, checkpoint_proof), to = self.successor)
         else:
           #this is a retransmission case handle it accordingly
-          x = 1
+          logger.info(str(self) + " received the broadcast from client.")
+          if(requestID in self.resultCache) :
+            logger.info(str(self) + " the result shuttle for broadcasted operation present in result cache. sending it to client :" + str(client_id))
+            send(('append_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+          else:
+            logger.info(str(self)+" result is not in cache")
+            self.retran_flag = 0
+            self.ReTransmittedRequest.append(requestID)
+            logger.info(str(self)+" Sending the operation to head and waiting for the result shuttle to come back")
+            send(('append', args, client_id, requestID), to = self.headReplica)
+            if await(self.retran_flag == 1):
+              logger.info(str(self) + " the result shuttle for broadcasted operation  received. sending it to client :" + str(client_id))
+              send(('append_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+              self.retran_flag = 0
+            elif timeout(conf['head_timeout']/1000):
+              logger.info(str(self) + " timed out. Sending reconfiguration request to olympus")
+              send(('reconfiguration', self.curr_config), to = olympus)
 
       else:
         logger.info(str(self)+" result is not in cache")
@@ -872,14 +947,15 @@ class Replica(process):
         logger.info(str(self)+" waiting for the result shuttle to come back")
         if await(self.retran_flag == 1):
           logger.info(str(self) + " the result shuttle for broadcasted operation  received. sending it to client :" + str(client_id))
-          send(('put_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
+          send(('append_result', {requestID : self.resultCache[requestID]}, requestID), to = client_id)
           self.retran_flag = 0
         elif timeout(conf['head_timeout']/1000):
           logger.info(str(self) + " timed out. Becomes immutable and sends the reconfiguration request to olympus")
-          output("Retransmission timeout. Needs reconfiguration")
+          send(('reconfiguration', self.curr_config), to = olympus)
 
     else:
       output("Replica is immutable")
+      send(('immutable',requestID), to = client_id)
 
   def receive(msg=('append', args, client_id, requestID, OrderShuttle), from_=p_id):
     cmd = 'append(' +str(args)+')'
@@ -972,6 +1048,7 @@ class Replica(process):
         else:
           logger.info(str(self) + " There orderProof is not correct. Becoming IMMUTABLE and sending reconfiguration request to olympus")
           output("Dropping invalid request")
+          send(('reconfiguration', self.curr_config), to = olympus)
 
   def receive(msg = ('get_dict'), from_ = client_id):
     send(('dict_reply', self.db), to = client_id)
@@ -1011,11 +1088,23 @@ class Replica(process):
           send(('result_back', result_shuttle, requestID), to = self.predecessor)
     else:
       output("Needs reconfiguration as the result shuttle is inconsistent. The replica will become immutable.")
-    #for key in self.resultCache :
-    #  output(key, self.resultCache[key])
+      logger.info(str(self) + " Result shuttle not consistent. Sending reconfig request to oly")
+      send(('reconfiguration', self.curr_config), to = olympus)
 
   def receive(msg=('val_chain_info', p, s, head), from_ = olympus):
     self.successor = s
     self.predecessor = p
     self.headReplica = head
     self.flag = 1
+
+  def receive(msg = ('wedge_request'), from_=olym):
+    self.state = "IMMUTABLE"
+    send(('wedged_reply', self, self.History, self.c_cp_proof), to = olym)
+
+  #testing code
+  def receive(msg = ('reconfig'), from_=client):
+    if isHead == True:
+      self.History[str(self)+str(self.current_slot)] = str(self) + ';' + str(self.current_slot) + ';put;movie;star'
+      self.current_slot = self.current_slot + 1
+      self.History[str(self)+str(self.current_slot)] = str(self) + ';' + str(self.current_slot) + ';put;movie;star'
+    send(('reconfiguration', self.curr_config), to = olympus)

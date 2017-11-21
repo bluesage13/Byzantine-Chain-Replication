@@ -70,13 +70,13 @@ def main():
   output("Creating Olympus")
   #oly = new(olympus.Olympus, num=1, at=conf['olympus_node'])
   oly = new(olympus.Olympus, num=1)
-  setup(oly, (conf,cni,failureCases))
+  setup(oly, (conf,cni,failureCases, 0))
   start(oly)
 
   output("Creating Client")
   w = 0
   for c in cli:
-    setup(c, (conf,oly, workload[str(w)]))
+    setup(c, (conf,oly, workload[str(w)], 0))
     start(c)
     w = w + 1
   sys.exit()
