@@ -646,7 +646,6 @@ class Replica(process):
 
           else:
             logger.info(str(self) + " sending order shuttle forward to " + str(client_id))
-            if( verify_result_shuttle)
             send(('get_result', OrderShuttle[1], requestID), to = client_id)
             logger.info(str(self) + " sending result shuttle forward to " + str(self.predecessor))
             
