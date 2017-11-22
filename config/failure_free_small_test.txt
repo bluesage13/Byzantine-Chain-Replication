@@ -5,5 +5,5 @@ client_timeout = 3000
 head_timeout = 3000
 nonhead_timeout = 3000
 checkpt_interval = 2
-workload[0] = put('movie', 'star');put('movie', 'star');put('movie', 'star');put('movie', 'star');reconfig
-workload[1] = get('movie');get('movie');get('movie');get('movie');get('movie');
+workload[0] = put('movie', 'star');put('movie', 'star');put('movie', 'star');put('movie', 'star');reconfig;put('matrix', 'neo')
+workload[1] = get('movie');get('movie');put('disco', 'dandiyaan');get('movie');get('movie');append('matrix', 'anderson')

@@ -18,6 +18,9 @@ class Olympus(process):
     self.curr_config = cc
     self.reconfig_flag = 0
     self.wedged_replies = {}
+    self.caught_up = 1
+    self.caught_up_hash = {}
+    self.caught_up_states = {}
 
   def get_logger(name, filename):
     formatter = logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
@@ -34,7 +37,8 @@ class Olympus(process):
     self.prikey = nacl.signing.SigningKey.generate()
     self.pubkey = self.prikey.verify_key
     logger.info("Created public and private keys for self")
-    create_replicas()
+    start_st = {}
+    create_replicas(start_st)
     while(True):
       await(self.reconfig_flag == 1)
       await(len(self.wedged_replies) == len(self.replicas))
@@ -94,6 +98,7 @@ class Olympus(process):
         logger.info(str(self) + " Catching up need not be done ")
         inv_catchup = False
 
+      logger.info(str(self) + " Beginning catch up process")
       if(inv_catchup == True):
         for r in self.wedged_replies:
           if r != h_s_rep:
@@ -111,7 +116,7 @@ class Olympus(process):
                 output("Has max checkpoint and completely truncated history")
             for rid in longest_h:
               if s_h == 0:
-                if (int(longest_h[rid].split(';')[1]) + 1) < cmp_s:
+                if (int(longest_h[rid].split(';')[1]) + 1) <= cmp_s:
                   output("skipping history " + longest_h[rid])
                   continue
                 else:
@@ -124,11 +129,51 @@ class Olympus(process):
               if h_f == 1:
                 catch_up_hist[rid] = longest_h[rid]
             logger.info(str(self) + " Catchup instructions for " + str(r) + " are: %s", catch_up_hist)
+            logger.info(str(self) + " Sending catch up instruction to : " + str(r))
+            send(('catch_up', catch_up_hist), to = r)
+            send(('catch_up',{}), to = h_s_rep)
+      else:
+        catch_up_hist = {}
+        for r in self.wedged_replies:
+          send(('catch_up', catch_up_hist), to = r)
+
+      await(self.caught_up == len(self.wedged_replies))
+      logger.info(str(self) + " Received all caught up messages")
+      logger.info(str(self) + " Verifying new Hashes")
+      hash_f = 0
+      correct_h = 0
+      for r in self.caught_up_hash:
+        if hash_f == 0:
+          temp = self.caught_up_hash[r]
+          temp_s = self.caught_up_states[r]
+          correct_h = correct_h + 1
+          hash_f = 1
+        else:
+          if temp == self.caught_up_hash[r]:
+            correct_h = correct_h + 1
+            temp_s = self.caught_up_states[r]
 
 
-      logger.info(str(self) + " Highest slot " + str(h_slot) + "seen by replica : " + str(h_s_rep))
-      break
 
+      if correct_h == int(conf['t'])+1 :
+        logger.info(str(self) + "Found enough correct hashes to start reconfiguration")
+        logger.info(str(self) + "Starting new configuration")
+        create_replicas(temp_s)
+        logger.info(str(self) + "Reconfiguration complete")
+        self.curr_config = self.curr_config + 1
+        for c_id in self.clientKeyMap:
+          logger.info(str(self) + "Sending new configuration to client : " + str(c_id))
+          send(('new_config', self.curr_config, self.replicaKeyMap, self.replicas), to = c_id)
+        self.reconfig_flag = 0
+
+      else:
+        logger.info(str(self) + "Couldn't get enough correct hashes.. Ideally get new quorum")
+
+
+  def receive(msg = ('caught_up', new_hash, db), from_ = r_id):
+    self.caught_up = self.caught_up + 1
+    self.caught_up_hash[r_id] = new_hash
+    self.caught_up_states[r_id] = db
 
   def receive(msg = ('get_public_key_maps'), from_ = p_id):
     logger.info("received get_public_key_maps message from: "+ str(p_id))
@@ -180,12 +225,17 @@ class Olympus(process):
     else:
       output("Reconfiguration underway for the received config value. Ignoring request")
 
-  def create_replicas():
+  def receive(msg = ('need_new_config', cfg), from_=c_id):
+    if self.curr_config > cfg:
+      send(('new_config', self.curr_config, self.replicaKeyMap, self.replicas), to = c_id)
+
+  def create_replicas(start_st):
     num_replicas = 2 * conf['t'] + 1
     logger.info("Creating replicas. Number = " + str(num_replicas))
     self.replicas = new(replica.Replica, num = num_replicas)
     output(self.replicas)
     cnt = 0
+    self.replicaKeyMap = {}
     for r in self.replicas:
       logger.info("setting up keys and starting replica: "+str(r))
       pri_key = nacl.signing.SigningKey.generate()
@@ -193,21 +243,21 @@ class Olympus(process):
       self.replicaKeyMap[r] = pub_key
       if(cnt == 0):
         if(cnt in self.failureCases):
-          setup(r, (conf, True, False, pri_key, cni, failureCases[cnt], self.curr_config, self))
+          setup(r, (conf, True, False, pri_key, cni, failureCases[cnt], self.curr_config, start_st,self))
         else:
-          setup(r, (conf, True, False, pri_key, cni, None, self.curr_config, self))
+          setup(r, (conf, True, False, pri_key, cni, None, self.curr_config, start_st,self))
 
       elif(cnt == (len(self.replicas) - 1)):
         if(cnt in self.failureCases):
-          setup(r, (conf, False, True, pri_key, cni, failureCases[cnt], self.curr_config, self))
+          setup(r, (conf, False, True, pri_key, cni, failureCases[cnt], self.curr_config, start_st,self))
         else:
-          setup(r, (conf, False, True, pri_key, cni, None, self.curr_config, self))
+          setup(r, (conf, False, True, pri_key, cni, None, self.curr_config, start_st, self))
 
       else:
         if(cnt in self.failureCases):
-          setup(r, (conf, False, False, pri_key, cni, failureCases[cnt], self.curr_config, self))
+          setup(r, (conf, False, False, pri_key, cni, failureCases[cnt], self.curr_config, start_st,self))
         else:
-          setup(r, (conf, False, False, pri_key, cni, None, self.curr_config, self))
+          setup(r, (conf, False, False, pri_key, cni, None, self.curr_config, start_st,self))
 
       start(r)
       cnt = cnt + 1

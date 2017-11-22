@@ -14,8 +14,8 @@ class Replica(process):
     logger.addHandler(hld)
     return logger
 
-  def setup(conf, head, tail, pri_key, cni, failures, cc,olympus):
-    self.db = {}
+  def setup(conf, head, tail, pri_key, cni, failures, cc, start_st, olympus):
+    self.db = start_st
     self.state = "ACTIVE"
     self.isHead = head
     self.isTail = tail
@@ -47,12 +47,14 @@ class Replica(process):
     self.mod_cp_hash = ""
     self.send_cp = 0
     self.curr_config = cc
+    self.should_term = False
 
 
   def run():
     logger_file_name = conf['test_case_name'] + str(self).split(':')[1] + '_r.txt'
     self.cp_interval = int(conf['checkpt_interval'])
     self.logger = get_logger('replica', logger_file_name)
+    logger.info(str(self) + " Created for configuration : " + str(self.curr_config) + " with state : %s", self.db)
     logger.info(str(self) + " Getting chain info from olympus")
     send(('get_chain_info'), to = olympus)
     await(self.flag == 1)
@@ -63,7 +65,7 @@ class Replica(process):
     parse_failures()
     logger.info(str(self) + " " + str(self.failures))
     output(self, self.failures)
-    await(False)
+    await(self.should_term == True)
 
   def parseFString(t):
     tg = ""
@@ -509,7 +511,7 @@ class Replica(process):
           #Injecting the change result failure
 
           if(fail_flag == True and self.curr_fail_op == "change_result"):
-            logger.info(str(self) + " injecting the change_result failure")
+            logger.info(str(self) + " injecting the change_result failure in get")
             output("injecting change_result Failure")
             result_statement = encodeStatement(str(self) + ";" + "OK")
             self.curr_fail_op = ""
@@ -644,9 +646,10 @@ class Replica(process):
 
           else:
             logger.info(str(self) + " sending order shuttle forward to " + str(client_id))
+            if( verify_result_shuttle)
             send(('get_result', OrderShuttle[1], requestID), to = client_id)
             logger.info(str(self) + " sending result shuttle forward to " + str(self.predecessor))
-            send(('result_back', OrderShuttle[1], requestID, client_id), to = self.predecessor)
+            
             if(self.send_cp == 1):
               if(validate_checkpoint_proof(self.h_cp_proof, self.chcslot)):
                 output("Checkpoint proof complete. Sending cp back in the chain")
@@ -1101,10 +1104,49 @@ class Replica(process):
     self.state = "IMMUTABLE"
     send(('wedged_reply', self, self.History, self.c_cp_proof), to = olym)
 
+  #send(('catch_up', catch_up_hist), to = r)
+  def receive(msg = ('catch_up', catch_up_hist), from_=olym):
+    logger.info(str(self) + "Catch_up message received")
+    logger.info(str(self) + " Catch up history is: %s", catch_up_hist)
+    if len(catch_up_hist) != 0:
+      for rid in catch_up_hist:
+        slot = get_slot_number()
+        cmd = catch_up_hist[rid]
+        if cmd.split(';')[2] == 'put':
+          key = cmd.split(';')[3]
+          val = cmd.split(';')[4]
+          self.db[key] = val
+
+        elif cmd.split(';')[2] == 'slice':
+          key = cmd.split(';')[3]
+          value = cmd.split(';')[4]
+          (start, end) = value.split(':')
+          v = self.db[key]
+          if((int(start) >= 0) and (int(end) <= len(v))):
+            v = v[int(start):int(end)]
+            self.db[key] = v
+
+        elif cmd.split(';')[2] == 'append':
+          key = cmd.split(';')[3]
+          value = cmd.split(';')[4]
+          if(key in self.db):
+            v = self.db[key]
+            v = v + " " + value
+            self.db[key] = val
+    logger.info(str(self) + " Catching up successful. sending back caught up message. New state is : %s" , self.db)
+    new_hash = get_hash()
+    send(('caught_up', new_hash, self.db), to=olym)
+    logger.info(str(self) + " Caught_up hash sent. Now terminating")
+    self.should_term = True
+
+
   #testing code
   def receive(msg = ('reconfig'), from_=client):
     if isHead == True:
-      self.History[str(self)+str(self.current_slot)] = str(self) + ';' + str(self.current_slot) + ';put;movie;star'
+      self.db["jedi"] = "skywalker"
+      self.History[str(self)+str(self.current_slot)] = str(self) + ';' + str(self.current_slot) + ';put;jedi;skywalker'
+      self.db["sith"] = "jarjarbinks"
       self.current_slot = self.current_slot + 1
-      self.History[str(self)+str(self.current_slot)] = str(self) + ';' + str(self.current_slot) + ';put;movie;star'
+      self.History[str(self)+str(self.current_slot)] = str(self) + ';' + str(self.current_slot) + ';put;sith;jarjarbinks'
+    send(('immutable',str(client)+"rfg"), to = client)
     send(('reconfiguration', self.curr_config), to = olympus)

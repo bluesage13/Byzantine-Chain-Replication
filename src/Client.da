@@ -26,6 +26,8 @@ class Client(process):
     self.curr_config = cc
     self.reconfig = False
     self.reconfig_at = None
+    self.head = None
+    self.received_new_config = False
 
   def run():
     logger_file_name = conf['test_case_name'] + str(self).split(':')[1] + '_c.txt'
@@ -52,27 +54,38 @@ class Client(process):
       output(workload)
 
     rep = list(self.replicas)
-    head = rep[0]
+    self.head = rep[0]
     opNum = 0
+    f_b = 0
+    prev_c = self.curr_config
     for op in workload:
       op_b = op[0:3]
       if(op_b == 'put'):
         key_val = op[4:(len(op)-1)]
         args = getArguments(key_val)
-        logger.info(str(self) + " sending put operation with "+ str(key_val) + " to head")
+        logger.info(str(self) + " sending put operation with "+ str(key_val) + " to head :" + str(head))
         send(('put', args, self, generateRequestId(opNum)), to = head)
         i = 0
         j = 0
         while(j < 2):
           if await((flag == 1) or (self.reconfig == True)):
             self.flag = 0
+            if(self.reconfig == True):
+              logger.info(str(self) + " Request lost in reconfig")
             break
           elif timeout(conf['client_timeout']/1000):
-            logger.info(str(self) + " Operation timeout. Broadcasting to all clients")
-            output("Operation TimedOut. Broadcasting message to all clients")
-            self.RTRequest.append(generateRequestId(opNum))
-            for r in self.replicas:
-              send(('put', args, self, generateRequestId(opNum)), to = r)
+            time.sleep(conf['client_timeout']/1000 - 1)
+            if prev_c == self.curr_config:
+              output("I'm the bastard : "+ str(self))
+              output(self.replicas)
+              logger.info(str(self) + " Operation timeout. Broadcasting to all clients")
+              output("Operation TimedOut. Broadcasting message to all clients")
+              self.RTRequest.append(generateRequestId(opNum))
+              for r in self.replicas:
+                send(('get', (args[0]), self, generateRequestId(opNum)), to = r)
+            else:
+              logger.info(str(self) + " Request lost in reconfig")
+              break
             j = j+1
           i = i + 1
 
@@ -80,74 +93,112 @@ class Client(process):
       elif(op_b == 'get'):
         key = op[4:(len(op)-1)]
         args = getArguments(key)
-        logger.info(str(self) + " sending get operation with "+ args[0] + " to head")
+        logger.info(str(self) + " sending get operation with "+ args[0] + " to head :" + str(head))
         send(('get', (args[0]), self, generateRequestId(opNum)), to = head)
         i = 0
         j = 0
         while(j < 2):
           if await((flag == 1) or (self.reconfig == True)):
             self.flag = 0
+            if(self.reconfig == True):
+              logger.info(str(self) + " Request lost in reconfig")
             break
           elif timeout(conf['client_timeout']/1000):
-            logger.info(str(self) + " Operation timeout. Broadcasting to all clients")
-            output("Operation TimedOut. Broadcasting message to all clients")
-            self.RTRequest.append(generateRequestId(opNum))
-            for r in self.replicas:
-              send(('get', (args[0]), self, generateRequestId(opNum)), to = r)
+            time.sleep(conf['client_timeout']/1000 - 1)
+            if prev_c == self.curr_config:
+              output("I'm the bastard : "+ str(self))
+              output(self.replicas)
+              logger.info(str(self) + " Operation timeout. Broadcasting to all clients")
+              output("Operation TimedOut. Broadcasting message to all clients")
+              self.RTRequest.append(generateRequestId(opNum))
+              for r in self.replicas:
+                send(('get', (args[0]), self, generateRequestId(opNum)), to = r)
+            else:
+              logger.info(str(self) + " Request lost in reconfig")
+              break
             j = j + 2
           i = i + 1
 
       elif(op_b == 'sli'):
         key_val = op[6:(len(op)-1)]
         args = getArguments(key_val)
-        logger.info(str(self) + " sending slice operation with "+ str(args) + " to head")
+        logger.info(str(self) + " sending slice operation with "+ str(args) + " to head :" + str(head))
         send(('slice', args, self, generateRequestId(opNum)), to = head)
         i = 0
         j = 0
         while(j < 2):
           if await((flag == 1) or (self.reconfig == True)):
             self.flag = 0
+            if(self.reconfig == True):
+              logger.info(str(self) + " Request lost in reconfig")
             break
           elif timeout(conf['client_timeout']/1000):
-            logger.info(str(self) + " Operation timeout. Broadcasting to all clients")
-            output("Operation TimedOut. Broadcasting message to all clients")
-            self.RTRequest.append(generateRequestId(opNum))
-            for r in self.replicas:
-              send(('slice', args, self, generateRequestId(opNum)), to = r)
+            time.sleep(conf['client_timeout']/1000 - 1)
+            if prev_c == self.curr_config:
+              output("I'm the bastard : "+ str(self))
+              output(self.replicas)
+              logger.info(str(self) + " Operation timeout. Broadcasting to all clients")
+              output("Operation TimedOut. Broadcasting message to all clients")
+              self.RTRequest.append(generateRequestId(opNum))
+              for r in self.replicas:
+                send(('get', (args[0]), self, generateRequestId(opNum)), to = r)
+            else:
+              logger.info(str(self) + " Request lost in reconfig")
+              break
             j = j+2
           i = i + 1
 
       elif(op_b == 'app'):
         key_val = op[7:(len(op)-1)]
         args = getArguments(key_val)
-        logger.info(str(self) + " sending append operation with "+ str(args) + " to head")
+        logger.info(str(self) + " sending append operation with "+ str(args) + " to head :" + str(head))
         send(('append', args, self, generateRequestId(opNum)), to = head)
         i = 0
         j = 0
         while(j < 2):
           if await((flag == 1) or (self.reconfig == True)):
             self.flag = 0
+            if(self.reconfig == True):
+              logger.info(str(self) + " Request lost in reconfig")
             break
           elif timeout(conf['client_timeout']/1000):
-            logger.info(str(self) + " Operation timeout. Broadcasting to all clients")
-            output("Operation TimedOut. Broadcasting message to all clients")
-            self.RTRequest.append(generateRequestId(opNum))
-            for r in self.replicas:
-              send(('append', args, self, generateRequestId(opNum)), to = r)
+            time.sleep(conf['client_timeout']/1000 - 1)
+            if prev_c == self.curr_config:
+              output("I'm the bastard : "+ str(self))
+              output(self.replicas)
+              logger.info(str(self) + " Operation timeout. Broadcasting to all clients")
+              output("Operation TimedOut. Broadcasting message to all clients")
+              self.RTRequest.append(generateRequestId(opNum))
+              for r in self.replicas:
+                send(('get', (args[0]), self, generateRequestId(opNum)), to = r)
+            else:
+              logger.info(str(self) + " Request lost in reconfig")
+              break
             j = j+2
           i = i + 1
 
       #for testing purpose
       elif(op_b == 'rec'):
         send(('reconfig'), to = head)
+        logger.info(str(self) + " Sending the reconfig trigger to head :" + str(head))
         if await((flag == 1) or (self.reconfig == True)):
           self.flag = 0
 
       if(self.reconfig == True):
         output("Reconfiguration is underway. Ask olympus for reconfig request")
+        rr = 0
+        while (rr == 0):
+          logger.info(str(self) + " Sending get_new_config request to Olympus")
+          send(('need_new_config', self.curr_config), to = oly)
+          if await(self.received_new_config == True):
+            self.reconfig = False
+            logger.info(str(self) + " Waiting for the configuration to reboot")
+            time.sleep(conf['client_timeout']/1000 - 1)
+            rr = 1
+          elif timeout(conf['client_timeout']/1000):
+            logger.info(str(self) + " Waiting for new configuration timed out.")
+          logger.info(str(self) + " Exited the loop.")
       opNum = opNum + 1
-
-
 
     send(('get_dict'), to = head)
     await(flag == 1)
@@ -156,6 +207,19 @@ class Client(process):
   def generateRequestId(opNum):
     requestID = str(self) + ';' + str(opNum)
     return requestID
+
+  def receive(msg = ('new_config', config, rkm, reps), from_ = olympus):
+    self.replicas = reps
+    self.head = list(reps)[0]
+    self.replicaKM = rkm
+    self.curr_config = config
+    output(reps)
+    logger.info(str(self) + " Received new configuration")
+    logger.info(str(self) + " New head is : " + str(self.head))
+    logger.info(str(self) + " Current Config is : " + str(self.curr_config))
+
+    self.received_new_config = True
+
 
   def receive(msg = ('public_key_maps', cKM, rKM), from_ = olympus):
     logger.info(str(self) + " received public key map from olympus")
