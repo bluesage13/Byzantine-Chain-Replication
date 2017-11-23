@@ -13,7 +13,7 @@ class Olympus(process):
     self.prikey = ""
     self.pubkey = ""
     self.client_num_id = cni
-    self.failureCases = fc
+    self.failures = fc
     self.logger = None
     self.curr_config = cc
     self.reconfig_flag = 0
@@ -41,7 +41,7 @@ class Olympus(process):
     create_replicas(start_st)
     while(True):
       await(self.reconfig_flag == 1)
-      await(len(self.wedged_replies) == len(self.replicas))
+      await(len(self.wedged_replies) == len(self.replicas) - 1)
 
 
       #validate every history for no holes
@@ -66,7 +66,10 @@ class Olympus(process):
       max_cp = -1
       for r in self.wedged_replies:
         cp = self.wedged_replies[r][1]
-        cp_slot = list(cp)[0]
+        if(len(cp) != 0):
+          cp_slot = list(cp)[0]
+        else:
+          cp_slot = -1
         if(max_cp < cp_slot):
           max_cp = cp_slot
         logger.info(str(self) + " Last Checkpoint for : " + str(r) + " is : " + str(cp_slot))
@@ -158,9 +161,10 @@ class Olympus(process):
       if correct_h == int(conf['t'])+1 :
         logger.info(str(self) + "Found enough correct hashes to start reconfiguration")
         logger.info(str(self) + "Starting new configuration")
+        self.curr_config = self.curr_config + 1
         create_replicas(temp_s)
         logger.info(str(self) + "Reconfiguration complete")
-        self.curr_config = self.curr_config + 1
+
         for c_id in self.clientKeyMap:
           logger.info(str(self) + "Sending new configuration to client : " + str(c_id))
           send(('new_config', self.curr_config, self.replicaKeyMap, self.replicas), to = c_id)
@@ -236,25 +240,30 @@ class Olympus(process):
     output(self.replicas)
     cnt = 0
     self.replicaKeyMap = {}
+    if self.curr_config in self.failures:
+      failureCases = self.failures[self.curr_config]
+    else:
+      failureCases = {}
+
     for r in self.replicas:
       logger.info("setting up keys and starting replica: "+str(r))
       pri_key = nacl.signing.SigningKey.generate()
       pub_key = pri_key.verify_key
       self.replicaKeyMap[r] = pub_key
       if(cnt == 0):
-        if(cnt in self.failureCases):
+        if(cnt in failureCases):
           setup(r, (conf, True, False, pri_key, cni, failureCases[cnt], self.curr_config, start_st,self))
         else:
           setup(r, (conf, True, False, pri_key, cni, None, self.curr_config, start_st,self))
 
       elif(cnt == (len(self.replicas) - 1)):
-        if(cnt in self.failureCases):
+        if(cnt in failureCases):
           setup(r, (conf, False, True, pri_key, cni, failureCases[cnt], self.curr_config, start_st,self))
         else:
           setup(r, (conf, False, True, pri_key, cni, None, self.curr_config, start_st, self))
 
       else:
-        if(cnt in self.failureCases):
+        if(cnt in failureCases):
           setup(r, (conf, False, False, pri_key, cni, failureCases[cnt], self.curr_config, start_st,self))
         else:
           setup(r, (conf, False, False, pri_key, cni, None, self.curr_config, start_st,self))

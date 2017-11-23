@@ -29,21 +29,23 @@ def getWorkload(conf):
       workload[ind] = commands
   return workload
 
-def getFailureCases(conf):
-  failureCases = {}
+def getFailures(conf):
+  failures = {}
+  prev_conf = 0
+  f_r_dict = {}
   for (key, val) in conf.items():
     if key[0:8] == "failures":
-      r_num = ""
-      #ignoring the first 0 as for phase 2 its just 0 no reconfiguration
-      for c in key[9:(len(key)-1)]:
-          r_num = r_num + c
-      r_num = int(r_num.split(',')[1])
-      temp = val.split(';')
-      trig_fail = []
-      for tf in temp:
-        trig_fail.append(tf.strip())
-      failureCases[r_num] = trig_fail
-  return failureCases
+      (conf, replica) = key[9:len(key)-1].split(',')
+      if prev_conf == int(conf):
+        f_r_dict[int(replica)] = val
+      else:
+        failures[prev_conf] = f_r_dict
+        prev_conf = conf
+        f_r_dict = {}
+        f_r_dict[int(replica)] = val
+  failures[prev_conf] = f_r_dict
+
+  return failures
 
 def main():
   #logger = get_logger('startup', 'startup.txt')
@@ -60,8 +62,8 @@ def main():
           conf[key.strip()] = int(val) if str.isdecimal(val) else val
 
   workload = getWorkload(conf)
-  failureCases = getFailureCases(conf)
-  output(failureCases)
+  failure_cases = getFailures(conf)
+  output(failure_cases)
   cli = new(client.Client, num=conf['num_client'])
   i = 0
   for c in cli:
@@ -70,7 +72,7 @@ def main():
   output("Creating Olympus")
   #oly = new(olympus.Olympus, num=1, at=conf['olympus_node'])
   oly = new(olympus.Olympus, num=1)
-  setup(oly, (conf,cni,failureCases, 0))
+  setup(oly, (conf,cni,failure_cases, 0))
   start(oly)
 
   output("Creating Client")

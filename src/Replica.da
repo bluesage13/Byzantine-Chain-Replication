@@ -3,6 +3,7 @@ import collections
 import sys
 import logging
 import nacl.hash
+import os
 
 class Replica(process):
   def get_logger(name, filename):
@@ -49,6 +50,36 @@ class Replica(process):
     self.curr_config = cc
     self.should_term = False
 
+    #for fault injection
+    self.client_request_t = {}
+    self.forwarded_request_t = {}
+    self.shuttle_t = {}
+    self.result_shuttle_t = {}
+    self.wedge_request_t = {}
+    self.new_config_t = {}
+    self.checkpt_t = {}
+    self.comp_cp_t = {}
+    self.get_run_st_t = {}
+    self.catch_up_t = {}
+    #fault injection counters
+    self.wr_cnt = 0
+    self.nc_cnt = 0
+    self.cp_cnt = 0
+    self.ccp_cnt = 0
+    self.grs_cnt = 0
+    self.cu_cnt = 0
+    self.th_num = 0
+    self.sleep_t = 0
+    #fault injection trigger flags
+    self.crash_f = False
+    self.th_flag = False
+    self.sl_flag = False
+    self.dr_flag = False
+    self.is_flag = False
+    self.eo_flag = False
+    self.ios_flag = False
+    self.irs_flag = False
+    self.dcs_flag = False
 
   def run():
     logger_file_name = conf['test_case_name'] + str(self).split(':')[1] + '_r.txt'
@@ -64,111 +95,124 @@ class Replica(process):
     logger.info(str(self) + " Parsing failures")
     parse_failures()
     logger.info(str(self) + " " + str(self.failures))
-    output(self, self.failures)
+    set_fail_flags("nc")
     await(self.should_term == True)
 
-  def parseFString(t):
-    tg = ""
-    cnum = ""
-    rnum = ""
-    fl = "trig"
+  def getNR(t):
+    i = 0
+    bb = ""
     for c in t:
-      if(fl == "trig"):
-        if c != '(':
-          tg = tg + c
-        else:
-          fl = "cnum"
-          continue
-
-      elif(fl == "cnum"):
-        if c != ',':
-          cnum = cnum + c
-        else:
-          fl = "rnum"
-          continue
-
-      elif(fl == "rnum"):
-        if c != ')':
-          rnum = rnum + c
-        else:
-          break
-
-    return (tg.strip(), int(cnum), int(rnum))
-
-  def getFailure(fl):
-    f = ""
-    for c in fl:
-      if(c != '('):
-        f = f + c
-      else:
+      i = i + 1
+      if c == '(':
         break
-    return f.strip()
+    bb = t[i:len(t) - 1]
+    s_bb = bb.split(',')
+    return (int(s_bb[0]), int(s_bb[1]))
+
+  def getN(t):
+    i = 0
+    bb = ""
+    for c in t:
+      i = i+1
+      if c == '(':
+        break
+    bb = t[i:len(t) - 1]
+    return int(bb)
+
+  def logFailureMap():
+    logger.info("Client_request : %s", self.client_request_t)
+    logger.info("Forwarded Request : %s", self.forwarded_request_t)
+    logger.info("Shuttle : %s", self.shuttle_t)
+    logger.info("Result Shuttle : %s", self.result_shuttle_t)
+    logger.info("Wedge Request : %s", self.wedge_request_t)
+    logger.info("New Configuration : %s", self.new_config_t)
+    logger.info("Checkpoint : %s", self.checkpt_t)
+    logger.info("Complete Checkpoint : %s", self.comp_cp_t)
+    logger.info("Get Running State : %s", self.get_run_st_t)
+    logger.info("Catch Up : %s", self.catch_up_t)
 
   def parse_failures():
+    # Form client_request(1, 2), crash();client_request(1, 2), crash()
     if(self.failures != None):
-      for elem in self.failures:
-        elem = elem.split(',')
-        t = (elem[0] +','+ elem[1]).strip()
-        f = elem[2].strip()
-        (t_name, t_cli, t_r_num ) = parseFString(t)
-        t_f = getFailure(f)
-        client_id = client_num_id[t_cli]
-        #if(str(client_id) in self.failure_map and t_name in self.failure_map[str(client_id)]):
-        #  self.failure_map[str(client_id)][t_name].append((t_r_num, t_f))
-        #else:
-        self.failure_map[str(client_id)][t_name] = [t_r_num, t_f]
-
-  def check_if_failure(client_id, f_type):
-    if(self.failures != None and (client_id in self.failure_map) and (f_type in self.failure_map[client_id])):
-      if(f_type == "client_request"):
-        req_num_max = self.failure_map[client_id][f_type][0]
-        if(req_num_max - 1 == 0):
-          req_num_max = req_num_max - 1
-          self.failure_map[client_id][f_type][0] = req_num_max
-          self.curr_fail_op = self.failure_map[client_id][f_type][1]
-          return True
+      l_pairs = self.failures.split(';')
+      for elem in l_pairs:
+        if len(elem.split(',')) == 3:
+          t = elem.split(',')[0].strip() +',' +elem.split(',')[1].strip()
+          f = elem.split(',')[2].strip()
         else:
-          req_num_max = req_num_max - 1
-          self.failure_map[client_id][f_type][0] = req_num_max
-        return False
+          t = elem.split(',')[0].strip()
+          f = elem.split(',')[1].strip()
+        stub = t[0:5]
+        if stub == "clien":
+          (cn, rn) = getNR(t)
+          if cn in self.client_request_t:
+            self.client_request_t[cn].append([rn, f])
+          else:
+            self.client_request_t[cn] = [[rn, f]]
 
-      elif(f_type == "forwarded_request" and (client_id in self.failure_map) and (f_type in self.failure_map[client_id])):
-        req_num_max = self.failure_map[client_id][f_type][0]
-        if(req_num_max - 1 == 0):
-          req_num_max = req_num_max - 1
-          self.failure_map[client_id][f_type][0] = req_num_max
-          self.curr_fail_op = self.failure_map[client_id][f_type][1]
-          return True
-        else:
-          req_num_max = req_num_max - 1
-          self.failure_map[client_id][f_type][0] = req_num_max
-        return False
+        elif stub == "forwa":
+          (cn, rn) = getNR(t)
+          if cn in self.forwarded_request_t:
+            self.forwarded_request_t[cn].append([rn, f])
+          else:
+            self.forwarded_request_t[cn] = [[rn, f]]
 
-      elif(f_type == "result_shuttle" and (client_id in self.failure_map) and (f_type in self.failure_map[client_id])):
-        req_num_max = self.failure_map[client_id][f_type][0]
-        if(req_num_max - 1 == 0):
-          req_num_max = req_num_max - 1
-          self.failure_map[client_id][f_type][0] = req_num_max
-          self.curr_fail_op = self.failure_map[client_id][f_type][1]
-          return True
-        else:
-          req_num_max = req_num_max - 1
-          self.failure_map[client_id][f_type][0] = req_num_max
-        return False
+        elif stub == "shutt":
+          (cn, rn) = getNR(t)
+          if cn in self.shuttle_t:
+            self.shuttle_t[cn].append([rn, f])
+          else:
+            self.shuttle_t[cn] = [[rn, f]]
 
-      elif(f_type == "shuttle" and (client_id in self.failure_map) and (f_type in self.failure_map[client_id])):
-        req_num_max = self.failure_map[client_id][f_type][0]
-        if(req_num_max - 1 == 0):
-          req_num_max = req_num_max - 1
-          self.failure_map[client_id][f_type][0] = req_num_max
-          self.curr_fail_op = self.failure_map[client_id][f_type][1]
-          return True
-        else:
-          req_num_max = req_num_max - 1
-          self.failure_map[client_id][f_type][0] = req_num_max
-        return False
-    else:
-      return False
+        elif stub == "resul":
+          (cn, rn) = getNR(t)
+          if cn in self.result_shuttle_t:
+            self.result_shuttle_t[cn].append([rn, f])
+          else:
+            self.result_shuttle_t[cn] = [[rn, f]]
+
+        elif stub == "wedge":
+          cn = getN(t)
+          if cn in self.wedge_request_t:
+            self.wedge_request_t[cn].append(f)
+          else:
+            self.wedge_request_t[cn] = [f]
+
+        elif stub == "new_c":
+          cn = getN(t)
+          if cn in self.new_config_t:
+            self.new_config_t[cn].append(f)
+          else:
+            self.new_config_t[cn] = [f]
+
+        elif stub == "check":
+          cn = getN(t)
+          if cn in self.checkpt_t:
+            self.checkpt_t[cn].append(f)
+          else:
+            self.checkpt_t[cn] = [f]
+
+        elif stub == "compl":
+          cn = getN(t)
+          if cn in self.comp_cp_t:
+            self.comp_cp_t[cn].append(f)
+          else:
+            self.comp_cp_t[cn] = [f]
+
+        elif stub == "get_r":
+          cn = getN(t)
+          if cn in self.get_run_st_t:
+            self.get_run_st_t[cn].append(f)
+          else:
+            self.get_run_st_t[cn] = [f]
+
+        elif stub == "catch":
+          cn = getN(t)
+          if cn in self.catch_up_t:
+            self.catch_up_t[cn].append(f)
+          else:
+            self.catch_up_t[cn] = [f]
+    logFailureMap()
 
   def get_slot_number():
     s = self.current_slot
@@ -262,6 +306,8 @@ class Replica(process):
     output(self.History)
 
   def receive(msg = ('completed_cp', cp_slot, checkpoint_proof), from_=p_id):
+    self.ccp_cnt = self.ccp_cnt + 1
+    set_fail_flags(self.ccp_cnt)
     if self.state == "ACTIVE" :
       output("received completed checkpoint proof should validate and truncate history")
       output(checkpoint_proof)
@@ -302,7 +348,6 @@ class Replica(process):
     cmd = 'put('+k_v[0]+','+(k_v[1])+')'
     logger.info(str(self) + " Received " + cmd + "from" + str(p_id))
     if(self.state == "ACTIVE"):
-      fail_flag = check_if_failure(str(client_id), "client_request")
       if(checkIfRidPresentInHistory(requestID) == False):
         if(self.isHead):
           slot = get_slot_number()
@@ -310,38 +355,19 @@ class Replica(process):
           if(os != 'error'):
             self.History[requestID] = os
           logger.info(str(self) + " The order statement for " + requestID + " is " + os)
-          if(fail_flag == True and self.curr_fail_op == "change_operation"):
-            #injecting Change_operation Failure
-            logger.info(str(self) + " Injecting the change_operation failure")
-            output("injecting Change_operation Failure")
-            os = getCorruptStatement(slot, 'get', ['x'])
-            enc_os = encodeStatement(os)
-            self.curr_fail_op = ""
-          else:
-            enc_os = encodeStatement(os)
+
+          enc_os = encodeStatement(os)
 
           self.db[k_v[0]] = k_v[1]
           orderProof = {}
           orderProof[requestID] = [enc_os]
           result_statement = ""
           result_statement = encodeStatement(str(self) + ";" + "OK")
-          #Injecting the change result failure
-
-          if(fail_flag == True and self.curr_fail_op == "change_result"):
-            logger.info(str(self) + " Injecting the change_result failure")
-            output("injecting change_result Failure")
-            result_statement = encodeStatement(str(self) + ";" + "OK")
-            self.curr_fail_op = ""
 
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
-          #injecting the drop result statement failure
-          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
-            logger.info(str(self) + " Injecting drop_result_statement failure")
-            output("injecting drop_result_statement Failure")
-            OrderShuttle[1][requestID].pop(0)
-            self.curr_fail_op = ""
+
           send(('put', k_v, client_id, requestID, OrderShuttle), to = self.successor)
           if((self.current_slot % self.cp_interval) == 0):
               checkpoint_proof = {}
@@ -398,9 +424,6 @@ class Replica(process):
     logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == "ACTIVE"):
 
-      fail_flag = check_if_failure(str(client_id), "forwarded_request")
-      if(fail_flag == False):
-        fail_flag = check_if_failure(str(client_id), "shuttle")
       if(isHead != True):
         if(verifyOrderProof(OrderShuttle[0], requestID) == True):
           slot = get_slot_number()
@@ -408,34 +431,15 @@ class Replica(process):
           if(os != 'error'):
             self.History[requestID] = os
           logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
-          if(fail_flag == True and self.curr_fail_op == "change_operation"):
-            #injecting change_operation Failure
-            logger.info(str(self) + " injecting the change_operation failure")
-            output("injecting change_operation Failure")
-            os = getCorruptStatement(slot, 'get', ['x'])
-            enc_os = encodeStatement(os)
-            self.curr_fail_op = ""
-          else:
-            enc_os = encodeStatement(os)
+
+          enc_os = encodeStatement(os)
 
           self.db[k_v[0]] = k_v[1]
           OrderShuttle[0][requestID].append(enc_os)
           result_statement = ""
           result_statement = encodeStatement(str(self) + ";" + "OK")
-          #Injecting the change result failure
-
-          if(fail_flag == True and self.curr_fail_op == "change_result"):
-            output("injecting change_result Failure")
-            result_statement = encodeStatement(str(self) + ";" + "OK")
-            self.curr_fail_op = ""
 
           OrderShuttle[1][requestID].append(result_statement)
-          #injecting the drop result statement failure
-          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
-            logger.info(str(self) + " Injecting the drop_result_statement failure")
-            output("injecting drop_result_statement Failure")
-            OrderShuttle[1][requestID].pop(0)
-            self.curr_fail_op = ""
 
           if((self.current_slot % self.cp_interval) == 0):
             self.mod_cp_hash = get_hash()
@@ -486,7 +490,7 @@ class Replica(process):
     cmd = 'get(' +key+')'
     logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == "ACTIVE"):
-      fail_flag = check_if_failure(str(client_id), "client_request")
+
       if(checkIfRidPresentInHistory(requestID) == False):
         if(self.isHead):
           slot = get_slot_number()
@@ -494,43 +498,22 @@ class Replica(process):
           if(os != 'error'):
             self.History[requestID] = os
           logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
-          if(fail_flag == True and self.curr_fail_op == "change_operation"):
-            #injecting Change_operation Failure
-            logger.info(str(self) + " injecting the change_operation failure")
-            output("injecting Change_operation Failure")
-            os = getCorruptStatement(slot, 'get', ['x'])
-            enc_os = encodeStatement(os)
-            self.curr_fail_op = ""
-          else:
-            enc_os = encodeStatement(os)
+
+          enc_os = encodeStatement(os)
 
           orderProof = {}
           orderProof[requestID] = [enc_os]
           result_statement = ""
 
-          #Injecting the change result failure
-
-          if(fail_flag == True and self.curr_fail_op == "change_result"):
-            logger.info(str(self) + " injecting the change_result failure in get")
-            output("injecting change_result Failure")
-            result_statement = encodeStatement(str(self) + ";" + "OK")
-            self.curr_fail_op = ""
+          if(key in self.db):
+            result_statement = encodeStatement(str(self) + ";" + self.db[key])
           else:
-            if(key in self.db):
-              result_statement = encodeStatement(str(self) + ";" + self.db[key])
-            else:
-              result_statement = encodeStatement(str(self) + ";")
+            result_statement = encodeStatement(str(self) + ";")
 
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
-          #injecting the drop result statement failure
 
-          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
-            logger.info(str(self) + " injecting the drop_result_statement failure")
-            output("injecting drop_result_statement Failure")
-            OrderShuttle[1][requestID].pop(0)
-            self.curr_fail_op = ""
           logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
           send(('get', key, client_id, requestID, OrderShuttle), to = self.successor)
           if((self.current_slot % self.cp_interval) == 0):
@@ -580,9 +563,6 @@ class Replica(process):
     cmd = 'get(' +key+')'
     logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == 'ACTIVE'):
-      fail_flag = check_if_failure(str(client_id), "forwarded_request")
-      if(fail_flag == False):
-        fail_flag = check_if_failure(str(client_id), "shuttle")
       if(isHead != True):
         if(verifyOrderProof(OrderShuttle[0], requestID) == True):
           slot = get_slot_number()
@@ -590,40 +570,19 @@ class Replica(process):
           if(os != 'error'):
             self.History[requestID] = os
           logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
-          if(fail_flag == True and self.curr_fail_op == "change_operation"):
-            #injecting Change_operation Failure
-            logger.info(str(self) + " Injecting the change_operation failure")
-            output("injecting Change_operation Failure")
-            os = getCorruptStatement(slot, 'get', ['x'])
-            enc_os = encodeStatement(os)
-            self.curr_fail_op = ""
-          else:
-            enc_os = encodeStatement(os)
+
+          enc_os = encodeStatement(os)
 
           OrderShuttle[0][requestID].append(enc_os)
           result_statement = ""
 
-          #Injecting the change result failure
 
-          if(fail_flag == True and self.curr_fail_op == "change_result"):
-            logger.info(str(self) + " Injecting the change_result failure")
-            output("injecting change_result Failure")
-            result_statement = encodeStatement(str(self) + ";" + "OK")
-            self.curr_fail_op = ""
+          if(key in self.db):
+            result_statement = encodeStatement(str(self) + ";" + self.db[key])
           else:
-            if(key in self.db):
-              result_statement = encodeStatement(str(self) + ";" + self.db[key])
-            else:
-              result_statement = encodeStatement(str(self) + ";")
+            result_statement = encodeStatement(str(self) + ";")
 
           OrderShuttle[1][requestID].append(result_statement)
-          #injecting the drop result statement failure
-
-          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
-            logger.info(str(self) + " Injecting the drop_result_statement failure")
-            output("injecting drop_result_statement Failure")
-            OrderShuttle[1][requestID].pop(0)
-            self.curr_fail_op = ""
 
           if((self.current_slot % self.cp_interval) == 0):
             self.mod_cp_hash = get_hash()
@@ -648,7 +607,7 @@ class Replica(process):
             logger.info(str(self) + " sending order shuttle forward to " + str(client_id))
             send(('get_result', OrderShuttle[1], requestID), to = client_id)
             logger.info(str(self) + " sending result shuttle forward to " + str(self.predecessor))
-            
+
             if(self.send_cp == 1):
               if(validate_checkpoint_proof(self.h_cp_proof, self.chcslot)):
                 output("Checkpoint proof complete. Sending cp back in the chain")
@@ -672,7 +631,7 @@ class Replica(process):
     cmd = 'slice(' +str(args)+')'
     logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == "ACTIVE"):
-      fail_flag = check_if_failure(str(client_id), "client_request")
+
       if(checkIfRidPresentInHistory(requestID) == False):
         if(self.isHead):
           slot = get_slot_number()
@@ -681,15 +640,8 @@ class Replica(process):
             self.History[requestID] = os
           orderProof = {}
           logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
-          if(fail_flag == True and self.curr_fail_op == "change_operation"):
-            #injecting Change_operation Failure
-            logger.info(str(self) + " Injecting the change_operation failure")
-            output("injecting Change_operation Failure")
-            os = getCorruptStatement(slot, 'get', ['x'])
-            enc_os = encodeStatement(os)
-            self.curr_fail_op = ""
-          else:
-            enc_os = encodeStatement(os)
+
+          enc_os = encodeStatement(os)
 
           orderProof[requestID] = [enc_os]
           result_statement = ""
@@ -706,13 +658,6 @@ class Replica(process):
           else:
             result_statement = encodeStatement(str(self) + ';' + "FAIL")
 
-          #Injecting the change result failure
-
-          if(fail_flag == True and self.curr_fail_op == "change_result"):
-            logger.info(str(self) + " Injecting the change_result failure")
-            output("injecting change_result Failure")
-            result_statement = encodeStatement(str(self) + ";" + "OK")
-            self.curr_fail_op = ""
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
@@ -772,9 +717,6 @@ class Replica(process):
     cmd = 'slice(' +str(args)+')'
     logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == "ACTIVE"):
-      fail_flag = check_if_failure(str(client_id), "forwarded_request")
-      if(fail_flag == False):
-        fail_flag = check_if_failure(str(client_id), "shuttle")
       if(isHead != True):
         if(verifyOrderProof(OrderShuttle[0], requestID) == True):
           slot = get_slot_number()
@@ -782,15 +724,8 @@ class Replica(process):
           if(os != 'error'):
             self.History[requestID] = os
           logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
-          if(fail_flag == True and self.curr_fail_op == "change_operation"):
-            #injecting Change_operation Failure
-            logger.info(str(self) + " Injecting the change_operation failure")
-            output("injecting Change_operation Failure")
-            os = getCorruptStatement(slot, 'get', ['x'])
-            enc_os = encodeStatement(os)
-            self.curr_fail_op = ""
-          else:
-            enc_os = encodeStatement(os)
+
+          enc_os = encodeStatement(os)
 
           OrderShuttle[0][requestID].append(enc_os)
           result_statement = ""
@@ -807,21 +742,7 @@ class Replica(process):
           else:
             result_statement = encodeStatement(str(self) + ';' + "FAIL")
 
-          #Injecting the change result failure
-
-          if(fail_flag == True and self.curr_fail_op == "change_result"):
-            logger.info(str(self) + " Injecting the change_result failure")
-            output("injecting change_result Failure")
-            result_statement = encodeStatement(str(self) + ";" + "OK")
-            self.curr_fail_op = ""
           OrderShuttle[1][requestID].append(result_statement)
-          #injecting the drop result statement failure
-
-          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
-            logger.info(str(self) + " Injecting the drop_result_statement failure")
-            output("injecting drop_result_statement Failure")
-            OrderShuttle[1][requestID].pop(0)
-            self.curr_fail_op = ""
 
           if((self.current_slot % self.cp_interval) == 0):
             self.mod_cp_hash = get_hash()
@@ -868,7 +789,7 @@ class Replica(process):
     cmd = 'append(' +str(args)+')'
     logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == "ACTIVE"):
-      fail_flag = check_if_failure(str(client_id), "client_request")
+
       if(checkIfRidPresentInHistory(requestID) == False):
         if(self.isHead):
           slot = get_slot_number()
@@ -877,15 +798,8 @@ class Replica(process):
             self.History[requestID] = os
           orderProof = {}
           logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
-          if(fail_flag == True and self.curr_fail_op == "change_operation"):
-            #injecting Change_operation Failure
-            logger.info(str(self) + " Injecting the change_operation failure")
-            output("injecting Change_operation Failure")
-            os = getCorruptStatement(slot, 'get', ['x'])
-            enc_os = encodeStatement(os)
-            self.curr_fail_op = ""
-          else:
-            enc_os = encodeStatement(os)
+
+          enc_os = encodeStatement(os)
 
           orderProof[requestID] = [enc_os]
           result_statement = ""
@@ -897,23 +811,10 @@ class Replica(process):
           else:
             result_statement = encodeStatement(str(self) + ';' + "FAIL")
 
-          #Injecting the change result failure
-
-          if(fail_flag == True and self.curr_fail_op == "change_result"):
-            logger.info(str(self) + " Injecting the change_result failure")
-            output("injecting change_result Failure")
-            result_statement = encodeStatement(str(self) + ";" + "OK")
-            self.curr_fail_op = ""
           resultProof = {}
           resultProof[requestID] = [result_statement]
           OrderShuttle = [orderProof, resultProof]
-          #injecting the drop result statement failure
 
-          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
-            logger.info(str(self) + " Injecting the drop_result_statement failure")
-            output("injecting drop_result_statement Failure")
-            OrderShuttle[1][requestID].pop(0)
-            self.curr_fail_op = ""
           logger.info(str(self) + " sending order shuttle forward to " + str(self.successor))
           send(('append', args, client_id, requestID, OrderShuttle), to = self.successor)
           if((self.current_slot % self.cp_interval) == 0):
@@ -964,24 +865,14 @@ class Replica(process):
     logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == 'ACTIVE'):
       if(isHead != True):
-        fail_flag = check_if_failure(str(client_id), "forwarded_request")
-        if(fail_flag == False):
-          fail_flag = check_if_failure(str(client_id), "shuttle")
         if(verifyOrderProof(OrderShuttle[0], requestID) == True):
           slot = get_slot_number()
           os = orderCommand(slot, 'append', args)
           if(os != 'error'):
             self.History[requestID] = os
           logger.info(str(self) + " The order statement for "+requestID + "is: " + os)
-          if(fail_flag == True and self.curr_fail_op == "change_operation"):
-            #injecting Change_operation Failure
-            logger.info(str(self) + " Injecting the change_operation failure")
-            output("injecting Change_operation Failure")
-            os = getCorruptStatement(slot, 'get', ['x'])
-            enc_os = encodeStatement(os)
-            self.curr_fail_op = ""
-          else:
-            enc_os = encodeStatement(os)
+
+          enc_os = encodeStatement(os)
 
           OrderShuttle[0][requestID].append(enc_os)
           result_statement = ""
@@ -993,21 +884,7 @@ class Replica(process):
           else:
             result_statement = encodeStatement(str(self) + ';' + "FAIL")
 
-          #Injecting the change result failure
-
-          if(fail_flag == True and self.curr_fail_op == "change_result"):
-            logger.info(str(self) + " Injecting the change_result failure")
-            output("injecting change_result Failure")
-            result_statement = encodeStatement(str(self) + ";" + "OK")
-            self.curr_fail_op = ""
           OrderShuttle[1][requestID].append(result_statement)
-          #injecting the drop result statement failure
-
-          if(fail_flag == True and self.curr_fail_op == "drop_result_statement"):
-            logger.info(str(self) + " Injecting the drop_result_statement failure")
-            output("injecting drop_result_statement Failure")
-            OrderShuttle[1][requestID].pop(0)
-            self.curr_fail_op = ""
 
           if((self.current_slot % self.cp_interval) == 0):
             self.mod_cp_hash = get_hash()
@@ -1058,6 +935,8 @@ class Replica(process):
   def receive(msg = ('checkpoint', cp_sn, checkpoint_proof), from_ = p_id):
     self.chcslot = cp_sn
     self.h_cp_proof = checkpoint_proof
+    self.cp_cnt = self.cp_cnt + 1
+    set_fail_flags("cp")
 
   def receive(msg = ('result_back', result_shuttle, requestID, clientID), from_ = p_id):
     cond = True
@@ -1101,7 +980,13 @@ class Replica(process):
 
   def receive(msg = ('wedge_request'), from_=olym):
     self.state = "IMMUTABLE"
+    self.wr_cnt = self.wr_cnt + 1
+    set_fail_flags("wr")
     send(('wedged_reply', self, self.History, self.c_cp_proof), to = olym)
+
+  def receive(msg = ('get_running_state'), from_= olymp):
+    send(('running_state', self.db), to=olymp)
+    self.should_term = True
 
   #send(('catch_up', catch_up_hist), to = r)
   def receive(msg = ('catch_up', catch_up_hist), from_=olym):
@@ -1135,7 +1020,8 @@ class Replica(process):
     logger.info(str(self) + " Catching up successful. sending back caught up message. New state is : %s" , self.db)
     new_hash = get_hash()
     send(('caught_up', new_hash, self.db), to=olym)
-    logger.info(str(self) + " Caught_up hash sent. Now terminating")
+    #end(('caught_up', new_hash), to=olym)
+    logger.info(str(self) + " Caught_up hash sent")
     self.should_term = True
 
 
@@ -1149,3 +1035,76 @@ class Replica(process):
       self.History[str(self)+str(self.current_slot)] = str(self) + ';' + str(self.current_slot) + ';put;sith;jarjarbinks'
     send(('immutable',str(client)+"rfg"), to = client)
     send(('reconfiguration', self.curr_config), to = olympus)
+
+  def generate_stub(elem):
+    st = ""
+    for c in elem:
+      if c != '()':
+        break
+      st = st + c
+    return st
+
+  def set_f_flags(l_f):
+    for elem in l_f:
+      stub = generate_stub(elem)
+      if stub == "crash":
+        logging.shutdown()
+        os._exit(-1)
+
+      elif stub == "truncate_history":
+        n = elem[17:len(elem)-1]
+        self.th_num = int(n)
+        self.th_flag = True
+
+      elif stub == "sleep":
+        t = elem[6:len(elem)-1]
+        time.sleep(int(t))
+
+      elif stub == "drop":
+        self.dr_flag = True
+
+      elif stub == "increment_slot":
+        self.is_flag = True
+
+      elif stub == "extra_op":
+        self.eo_flag = True
+
+      elif stub == "invalid_order_sig":
+        self.ios_flag = True
+
+      elif stub == "invalid_result_sig":
+        self.irs_flag = True
+
+      elif stub == "drop_checkpt_stmts":
+        self.dcs_flag = True
+
+  def set_fail_flags(t):
+    if t == "cp":
+      if len(self.checkpt_t) != 0:
+        if self.cp_cnt in self.checkpt_t:
+          set_f_flags(self.checkpt_t[self.cp_cnt])
+
+    elif t == "nc":
+      if len(self.new_config_t) != 0:
+        if (self.curr_config-1) in self.new_config_t:
+          set_f_flags(self.new_config_t[self.nc_cnt])
+
+    elif t == "wr":
+      if len(self.wedge_request_t) != 0:
+        if self.wr_cnt in self.wedge_request_t:
+          set_f_flags(self.wedge_request_t[self.wr_cnt])
+
+    elif t == "ccp":
+      if len(self.comp_cp_t) != 0:
+        if self.ccp_cnt in self.comp_cp_t:
+          set_f_flags(self.comp_cp_t[self.ccp_cnt])
+
+    elif t == "grs":
+      if len(self.get_run_st_t) != 0:
+        if self.grs_cnt in self.get_run_st_t:
+          set_f_flags(self.get_run_st_t[self.grs_cnt])
+
+    elif t == "cu":
+      if len(self.catch_up_t) != 0:
+        if self.cu_cnt in self.catch_up_t:
+          set_f_flags(self.catch_up_t[self.cu_cnt])
