@@ -21,6 +21,8 @@ fault tolerance. The clients get their workload form the configuration file. Cli
 Olympus to create the keys for signing. The public keys of all elements are shared on request.
 Fault Injection: If failure and triggers are mentioned in the configuration file then the necessary failures are
 injected during runtime in replicas when the trigger occurs.
+Client Polling for Reconfiguration : Each client waits for client_timeout period and broadcasts the operation to all replicas
+on timeout. Before broadcasting it enquires Olympus for new configuration.
 
 WORKLOAD GENERATION
 ================================================================================
@@ -39,9 +41,11 @@ BUGS AND LIMITATIONS
 Due to lack of programatically checking result for large workloads, results for failure cases cannot be verified.
 Some failures and triggers have not been implemented. Failures: Get_running_state() Triggers: invalid_order_sig, invalid_result_sig,
 drop_checkpt_struct, increment_slot, extra_op
+No quorum selection. All hashes and running states are considered. However, at the end if t+1 consistent hashes and states are found
+then they are considered.
 The system has not been implemented or tested on multiHost environment.
 The verification at end of small load can be done by reaching the Client Logs. There is no automated way of testing the output.
-The messages from client and replica to head are not signed.
+The messages from client and replica to Olympus are not signed.
 
 PERFORMANCE TESTING
 ================================================================================
