@@ -1,4 +1,4 @@
-test_case_name = failure_free_small_test
+test_case_name = Failure_free_inject_reconfig
 t = 1
 num_client = 2
 client_timeout = 3000

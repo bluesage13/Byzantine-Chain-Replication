@@ -18,7 +18,7 @@ class Olympus(process):
     self.curr_config = cc
     self.reconfig_flag = 0
     self.wedged_replies = {}
-    self.caught_up = 1
+    self.caught_up = 0
     self.caught_up_hash = {}
     self.caught_up_states = {}
 
@@ -41,8 +41,9 @@ class Olympus(process):
     create_replicas(start_st)
     while(True):
       await(self.reconfig_flag == 1)
-      await(len(self.wedged_replies) == len(self.replicas) - 1)
-
+      #CHANGE THIS
+      await(len(self.wedged_replies) == len(self.replicas))
+      logger.info(str(self) + " Wedged Replies are %s", self.wedged_replies)
 
       #validate every history for no holes
       logger.info(str(self) + " Reconfiguration underway")
@@ -63,13 +64,13 @@ class Olympus(process):
       logger.info(str(self) + " Getting highest checkpoint")
 
       #get highest checkpoint
-      max_cp = -1
+      max_cp = 0
       for r in self.wedged_replies:
         cp = self.wedged_replies[r][1]
         if(len(cp) != 0):
           cp_slot = list(cp)[0]
         else:
-          cp_slot = -1
+          cp_slot = 0
         if(max_cp < cp_slot):
           max_cp = cp_slot
         logger.info(str(self) + " Last Checkpoint for : " + str(r) + " is : " + str(cp_slot))
@@ -102,13 +103,17 @@ class Olympus(process):
         inv_catchup = False
 
       logger.info(str(self) + " Beginning catch up process")
+      logger.info(str(self) + "The Wedged replies received are %s", self.wedged_replies[r][1])
       if(inv_catchup == True):
         for r in self.wedged_replies:
           if r != h_s_rep:
             #calculate the difference
             longest_h = self.wedged_replies[h_s_rep][0]
             cmp_h = self.wedged_replies[r][0]
-            cmp_s = list(self.wedged_replies[r][1])[0]
+            if len(self.wedged_replies[r][1]) != 0:
+              cmp_s = list(self.wedged_replies[r][1])[0]
+            else:
+              cmp_s = 0
             catch_up_hist = {}
             h_f = 0
             s_h = 0
@@ -143,6 +148,9 @@ class Olympus(process):
       await(self.caught_up == len(self.wedged_replies))
       logger.info(str(self) + " Received all caught up messages")
       logger.info(str(self) + " Verifying new Hashes")
+      logger.info(str(self) + " Number of hashesh received is " + str(len(self.caught_up_hash)))
+      logger.info(str(self) + "Printing all hashes : %s" , self.caught_up_hash)
+      logger.info(str(self) + "Received final states are : %s", self.caught_up_states)
       hash_f = 0
       correct_h = 0
       for r in self.caught_up_hash:
@@ -156,9 +164,7 @@ class Olympus(process):
             correct_h = correct_h + 1
             temp_s = self.caught_up_states[r]
 
-
-
-      if correct_h == int(conf['t'])+1 :
+      if correct_h >= int(conf['t'])+1 :
         logger.info(str(self) + "Found enough correct hashes to start reconfiguration")
         logger.info(str(self) + "Starting new configuration")
         self.curr_config = self.curr_config + 1
@@ -178,6 +184,8 @@ class Olympus(process):
     self.caught_up = self.caught_up + 1
     self.caught_up_hash[r_id] = new_hash
     self.caught_up_states[r_id] = db
+    logger.info(str(self) + "Received caught up from.. " + str(r_id))
+    logger.info(str(self) + "Its final state is : %s " , db)
 
   def receive(msg = ('get_public_key_maps'), from_ = p_id):
     logger.info("received get_public_key_maps message from: "+ str(p_id))
@@ -228,6 +236,7 @@ class Olympus(process):
 
     else:
       output("Reconfiguration underway for the received config value. Ignoring request")
+      logger.info(str(self) + " Reconfiguration is underway ignoring request")
 
   def receive(msg = ('need_new_config', cfg), from_=c_id):
     if self.curr_config > cfg:

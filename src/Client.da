@@ -71,12 +71,12 @@ class Client(process):
           if await((flag == 1) or (self.reconfig == True)):
             self.flag = 0
             if(self.reconfig == True):
-              logger.info(str(self) + " Request lost in reconfig")
+              logger.info(str(self) + " Request lost in reconfig : " + op)
             break
           elif timeout(conf['client_timeout']/1000):
             time.sleep(conf['client_timeout']/1000 - 1)
             if prev_c == self.curr_config:
-              output("I'm the bastard : "+ str(self))
+              output("I'm broadcasting for operation : "+ op)
               output(self.replicas)
               logger.info(str(self) + " Operation timeout. Broadcasting to all clients")
               output("Operation TimedOut. Broadcasting message to all clients")
@@ -84,7 +84,7 @@ class Client(process):
               for r in self.replicas:
                 send(('get', (args[0]), self, generateRequestId(opNum)), to = r)
             else:
-              logger.info(str(self) + " Request lost in reconfig")
+              logger.info(str(self) + " Request lost in reconfig : " + op)
               break
             j = j+1
           i = i + 1
@@ -101,12 +101,12 @@ class Client(process):
           if await((flag == 1) or (self.reconfig == True)):
             self.flag = 0
             if(self.reconfig == True):
-              logger.info(str(self) + " Request lost in reconfig")
+              logger.info(str(self) + " Request lost in reconfig : " + op)
             break
           elif timeout(conf['client_timeout']/1000):
             time.sleep(conf['client_timeout']/1000 - 1)
             if prev_c == self.curr_config:
-              output("I'm the bastard : "+ str(self))
+              output("Broadcasting for operation " + op)
               output(self.replicas)
               logger.info(str(self) + " Operation timeout. Broadcasting to all clients")
               output("Operation TimedOut. Broadcasting message to all clients")
@@ -114,7 +114,7 @@ class Client(process):
               for r in self.replicas:
                 send(('get', (args[0]), self, generateRequestId(opNum)), to = r)
             else:
-              logger.info(str(self) + " Request lost in reconfig")
+              logger.info(str(self) + " Request lost in reconfig : " + op)
               break
             j = j + 2
           i = i + 1
@@ -130,12 +130,12 @@ class Client(process):
           if await((flag == 1) or (self.reconfig == True)):
             self.flag = 0
             if(self.reconfig == True):
-              logger.info(str(self) + " Request lost in reconfig")
+              logger.info(str(self) + " Request lost in reconfig : " + op)
             break
           elif timeout(conf['client_timeout']/1000):
             time.sleep(conf['client_timeout']/1000 - 1)
             if prev_c == self.curr_config:
-              output("I'm the bastard : "+ str(self))
+              output("Broadcasting for operation " + op)
               output(self.replicas)
               logger.info(str(self) + " Operation timeout. Broadcasting to all clients")
               output("Operation TimedOut. Broadcasting message to all clients")
@@ -143,7 +143,7 @@ class Client(process):
               for r in self.replicas:
                 send(('get', (args[0]), self, generateRequestId(opNum)), to = r)
             else:
-              logger.info(str(self) + " Request lost in reconfig")
+              logger.info(str(self) + " Request lost in reconfig : " + op)
               break
             j = j+2
           i = i + 1
@@ -159,12 +159,12 @@ class Client(process):
           if await((flag == 1) or (self.reconfig == True)):
             self.flag = 0
             if(self.reconfig == True):
-              logger.info(str(self) + " Request lost in reconfig")
+              logger.info(str(self) + " Request lost in reconfig : " + op)
             break
           elif timeout(conf['client_timeout']/1000):
             time.sleep(conf['client_timeout']/1000 - 1)
             if prev_c == self.curr_config:
-              output("I'm the bastard : "+ str(self))
+              output("Broadcasting for operation " + op)
               output(self.replicas)
               logger.info(str(self) + " Operation timeout. Broadcasting to all clients")
               output("Operation TimedOut. Broadcasting message to all clients")
@@ -172,7 +172,7 @@ class Client(process):
               for r in self.replicas:
                 send(('get', (args[0]), self, generateRequestId(opNum)), to = r)
             else:
-              logger.info(str(self) + " Request lost in reconfig")
+              logger.info(str(self) + " Request lost in reconfig : " + op)
               break
             j = j+2
           i = i + 1

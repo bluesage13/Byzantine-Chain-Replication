@@ -37,12 +37,24 @@ This value can be reproduce using the same seed value.
 BUGS AND LIMITATIONS
 ================================================================================
 Due to lack of programatically checking result for large workloads, results for failure cases cannot be verified.
-In failure cases, reconfiguration is not supported hence, on meeting a reconfiguration case, a log for sending
-reconfiguration request to the Olympus is generated.
-This system doesnot support multihosting. It can be made to run on a multihost system with a small change to the
-code however the timeouts have not been handled efficiently.
-The failure case : Some combinations of failure trigger cases have not been tested
+Some failures and triggers have not been implemented. Failures: Get_running_state() Triggers: invalid_order_sig, invalid_result_sig,
+drop_checkpt_struct, increment_slot, extra_op
+The system has not been implemented or tested on multiHost environment.
+The verification at end of small load can be done by reaching the Client Logs. There is no automated way of testing the output.
+The messages from client and replica to head are not signed.
 
+PERFORMANCE TESTING
+================================================================================
+Raft.da : bash time command result: real	0m8.522s user	0m12.164s sys	0m1.293s
+Project Code: bash time command result: real	0m12.200s user	0m31.381s sys	0m3.494s
+
+LINES OF CODE
+================================================================================
+384  lines : Client.da
+281  lines : Olympus.da
+1144 lines : Replica.da
+ 84  lines : startup.da
+1893 lines : total
 
 CONTRIBUTIONS
 ================================================================================

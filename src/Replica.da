@@ -40,8 +40,8 @@ class Replica(process):
     self.logger = None
     #for checkpointing
     self.cp_interval = -1
-    self.cccslot = -1
-    self.chcslot = -1
+    self.cccslot = 0
+    self.chcslot = 0
     self.h_cp_proof = {}
     self.c_cp_proof = {}
     self.hasher = nacl.hash.sha256
@@ -307,42 +307,51 @@ class Replica(process):
 
   def receive(msg = ('completed_cp', cp_slot, checkpoint_proof), from_=p_id):
     self.ccp_cnt = self.ccp_cnt + 1
-    set_fail_flags(self.ccp_cnt)
-    if self.state == "ACTIVE" :
-      output("received completed checkpoint proof should validate and truncate history")
-      output(checkpoint_proof)
-      truncate_history(cp_slot)
-      if(isHead != True):
-        send(('completed_cp', cp_slot, checkpoint_proof), to = self.predecessor)
-      self.cccslot = cp_slot
-      self.c_cp_proof = checkpoint_proof
+    set_fail_flags("ccp")
+    if self.dr_flag == False:
+      if self.state == "ACTIVE" :
+        output("received completed checkpoint proof should validate and truncate history")
+        output(checkpoint_proof)
+        truncate_history(cp_slot)
+        if(isHead != True):
+          send(('completed_cp', cp_slot, checkpoint_proof), to = self.predecessor)
+        self.cccslot = cp_slot
+        self.c_cp_proof = checkpoint_proof
+    else:
+      self.dr_flag == True
 
   def receive(msg = ('checkpoint', cp_slot, checkpoint_proof), from_=p_id):
-    if self.state == "ACTIVE" :
-      if(self.current_slot >= cp_slot):
-        checkpoint_proof[cp_slot].append(self.mod_cp_hash)
-        if(isTail != True):
-          output("received checkpoint, appended self hash")
-          output(checkpoint_proof)
-          logger.info(str(self) + "sending checkpoint proof forward to " + str(self.successor))
-          send(('checkpoint', cp_slot, checkpoint_proof), to = self.successor)
-        else:
-          output("In tail added self hash now checking validity")
-          output(checkpoint_proof)
-          if(validate_checkpoint_proof(checkpoint_proof, cp_slot)):
-            output("Checkpoint proof complete. Sending cp back in the chain")
-            logger.info(str(self) + "sending checkpoint proof back in the chain " + str(self.predecessor))
-            truncate_history(cp_slot)
-            send(('completed_cp', cp_slot, checkpoint_proof), to = self.predecessor)
-            self.cccslot = cp_slot
-            self.c_cp_proof = checkpoint_proof
+    logger.info(str(self) + "Received checkpoint shuttle from " + str(p_id))
+    self.cp_cnt = self.cp_cnt + 1
+    set_fail_flags("cp")
+    if self.dr_flag == False:
+      if self.state == "ACTIVE" :
+        if(self.current_slot >= cp_slot):
+          checkpoint_proof[cp_slot].append(self.mod_cp_hash)
+          if(isTail != True):
+            output("received checkpoint, appended self hash")
+            output(checkpoint_proof)
+            logger.info(str(self) + "sending checkpoint proof forward to " + str(self.successor))
+            send(('checkpoint', cp_slot, checkpoint_proof), to = self.successor)
           else:
-            output("Found error in the checkpoint proof, call for reconfiguration")
-            output("Actually the result shuttle will anyway cause reconfig request in this case")
-      else:
-        output("Saving the checkpoint until slot reaches required value")
-        self.chcslot = cp_slot
-        self.h_cp_proof = checkpoint_proof
+            output("In tail added self hash now checking validity")
+            output(checkpoint_proof)
+            if(validate_checkpoint_proof(checkpoint_proof, cp_slot)):
+              output("Checkpoint proof complete. Sending cp back in the chain")
+              logger.info(str(self) + "sending checkpoint proof back in the chain " + str(self.predecessor))
+              truncate_history(cp_slot)
+              send(('completed_cp', cp_slot, checkpoint_proof), to = self.predecessor)
+              self.cccslot = cp_slot
+              self.c_cp_proof = checkpoint_proof
+            else:
+              output("Found error in the checkpoint proof, call for reconfiguration")
+              output("Actually the result shuttle will anyway cause reconfig request in this case")
+        else:
+          output("Saving the checkpoint until slot reaches required value")
+          self.chcslot = cp_slot
+          self.h_cp_proof = checkpoint_proof
+    else:
+      self.dr_flag = True
 
   def receive(msg = ('put', k_v, client_id, requestID), from_=p_id):
     cmd = 'put('+k_v[0]+','+(k_v[1])+')'
@@ -420,6 +429,7 @@ class Replica(process):
       send(('immutable',requestID), to = client_id)
 
   def receive(msg = ('put', k_v, client_id, requestID, OrderShuttle), from_=p_id):
+
     cmd = 'put(' +k_v[0]+','+k_v[1]+')'
     logger.info(str(self) + " Received "+cmd+" from: " + str(p_id))
     if(self.state == "ACTIVE"):
@@ -932,12 +942,6 @@ class Replica(process):
   def receive(msg = ('get_dict'), from_ = client_id):
     send(('dict_reply', self.db), to = client_id)
 
-  def receive(msg = ('checkpoint', cp_sn, checkpoint_proof), from_ = p_id):
-    self.chcslot = cp_sn
-    self.h_cp_proof = checkpoint_proof
-    self.cp_cnt = self.cp_cnt + 1
-    set_fail_flags("cp")
-
   def receive(msg = ('result_back', result_shuttle, requestID, clientID), from_ = p_id):
     cond = True
     resultStatements = result_shuttle[requestID]
@@ -979,10 +983,15 @@ class Replica(process):
     self.flag = 1
 
   def receive(msg = ('wedge_request'), from_=olym):
-    self.state = "IMMUTABLE"
     self.wr_cnt = self.wr_cnt + 1
     set_fail_flags("wr")
-    send(('wedged_reply', self, self.History, self.c_cp_proof), to = olym)
+    logger.info(str(self) + " Wedged request received")
+    if self.dr_flag == False :
+      self.state = "IMMUTABLE"
+      logger.info(str(self) + " Sending response for wedge request")
+      send(('wedged_reply', self, self.History, self.c_cp_proof), to = olym)
+    else:
+      self.dr_flag = False
 
   def receive(msg = ('get_running_state'), from_= olymp):
     send(('running_state', self.db), to=olymp)
@@ -990,6 +999,8 @@ class Replica(process):
 
   #send(('catch_up', catch_up_hist), to = r)
   def receive(msg = ('catch_up', catch_up_hist), from_=olym):
+    self.cu_cnt = self.cu_cnt + 1
+    set_fail_flags("cu")
     logger.info(str(self) + "Catch_up message received")
     logger.info(str(self) + " Catch up history is: %s", catch_up_hist)
     if len(catch_up_hist) != 0:
@@ -1039,15 +1050,17 @@ class Replica(process):
   def generate_stub(elem):
     st = ""
     for c in elem:
-      if c != '()':
+      if c == '(':
         break
       st = st + c
-    return st
+    return st.strip()
 
   def set_f_flags(l_f):
     for elem in l_f:
       stub = generate_stub(elem)
+      logger.info(str(self) + "Stub generated is " + stub)
       if stub == "crash":
+        logger.info(str(self) + " Crash Triggered")
         logging.shutdown()
         os._exit(-1)
 
@@ -1055,9 +1068,25 @@ class Replica(process):
         n = elem[17:len(elem)-1]
         self.th_num = int(n)
         self.th_flag = True
+        logger.info(str(self) + " Truncating history by " + str(self.th_num))
+        revk = list(self.History)
+        num_to_pop = int(self.th_num)
+        if self.th_num > len(self.History):
+          for el in revk:
+            self.History.pop(el)
+        else:
+          c = 0
+          for el in revk:
+            if c == num_to_pop:
+              break
+            else:
+              self.History.pop(el)
+            c = c+1
+        logger.info(str(self) + " Truncated History is %s" ,str(self.History))
 
       elif stub == "sleep":
         t = elem[6:len(elem)-1]
+        logger.info(str(self) + " Sleeping for time (ms)" + str(t))
         time.sleep(int(t))
 
       elif stub == "drop":
@@ -1081,7 +1110,10 @@ class Replica(process):
   def set_fail_flags(t):
     if t == "cp":
       if len(self.checkpt_t) != 0:
+        logger.info(str(self) + " Checking for CP Trigger at CP_number = " +str(self.cp_cnt))
         if self.cp_cnt in self.checkpt_t:
+          logger.info(str(self) + " Trigger Checkpoint reached ")
+          logger.info(str(self) + " Failures at this Trigger : %s" , self.checkpt_t[self.cp_cnt])
           set_f_flags(self.checkpt_t[self.cp_cnt])
 
     elif t == "nc":
@@ -1097,6 +1129,7 @@ class Replica(process):
     elif t == "ccp":
       if len(self.comp_cp_t) != 0:
         if self.ccp_cnt in self.comp_cp_t:
+          logger.info(str(self) + "Trigger Completed Checkpoint received ")
           set_f_flags(self.comp_cp_t[self.ccp_cnt])
 
     elif t == "grs":
@@ -1107,4 +1140,5 @@ class Replica(process):
     elif t == "cu":
       if len(self.catch_up_t) != 0:
         if self.cu_cnt in self.catch_up_t:
+          logger.info(str(self) + " Catchup message Trigger reached ")
           set_f_flags(self.catch_up_t[self.cu_cnt])
